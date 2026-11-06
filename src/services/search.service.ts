@@ -3,17 +3,19 @@ import type { CurrentUser } from "@/lib/auth/current-user";
 import { escapeRegex } from "@/lib/api";
 import { hasPermission } from "@/lib/permissions";
 import type { ProjectStatus } from "@/lib/constants";
-import { Department, Project, User } from "@/models";
+import { Department, Project, Task, User } from "@/models";
+import type { TaskStatus } from "@/lib/constants";
+import { accessContext, projectVisibilityFilter, taskVisibilityFilter } from "./access";
 import type { SearchResultDTO } from "@/types/dto";
-import { employeeVisibilityFilter, visibleDepartmentIds, visibleProjectIds } from "./scope";
+import { employeeVisibilityFilter, visibleDepartmentIds } from "./scope";
 
 /** Global search across entities the user is allowed to see. */
 export async function globalSearch(user: CurrentUser, q: string): Promise<SearchResultDTO> {
-  const empty: SearchResultDTO = { employees: [], departments: [], projects: [] };
+  const empty: SearchResultDTO = { employees: [], departments: [], projects: [], tasks: [] };
   if (q.trim().length < 2) return empty;
   const rx = new RegExp(escapeRegex(q.trim()), "i");
 
-  const [employees, departments, projects] = await Promise.all([
+  const [employees, departments, projects, tasks] = await Promise.all([
     (async () => {
       if (!hasPermission(user.role, "employee:read")) return [];
       const scope = await employeeVisibilityFilter(user);
@@ -44,17 +46,24 @@ export async function globalSearch(user: CurrentUser, q: string): Promise<Search
     })(),
     (async () => {
       if (!hasPermission(user.role, "project:read")) return [];
-      const visible = await visibleProjectIds(user);
-      const rows = await Project.find({
-        ...(visible ? { _id: { $in: visible } } : {}),
-        $or: [{ name: rx }, { code: rx }, { client: rx }],
-      })
+      const ctx = await accessContext(user);
+      const rows = await Project.find({ $and: [projectVisibilityFilter(ctx), { $or: [{ name: rx }, { code: rx }, { client: rx }] }] })
         .select("name code status")
         .limit(5)
         .lean();
       return rows.map((p) => ({ id: p._id.toString(), name: p.name, code: p.code, status: p.status as ProjectStatus }));
     })(),
+    (async () => {
+      if (!hasPermission(user.role, "task:read")) return [];
+      const ctx = await accessContext(user);
+      const rows = await Task.find({ $and: [taskVisibilityFilter(ctx), { $or: [{ title: rx }, { taskNumber: rx }] }] })
+        .select("taskNumber title status")
+        .sort({ updatedAt: -1 })
+        .limit(6)
+        .lean();
+      return rows.map((t) => ({ id: t._id.toString(), taskNumber: t.taskNumber, title: t.title, status: t.status as TaskStatus }));
+    })(),
   ]);
 
-  return { employees, departments, projects };
+  return { employees, departments, projects, tasks };
 }

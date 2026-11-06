@@ -1,6 +1,7 @@
 import "server-only";
 import type { Types } from "mongoose";
-import { addDays, endOfDay, startOfDay, startOfMonth } from "date-fns";
+import { addDays, startOfMonth } from "date-fns";
+import { utcDayRange } from "@/lib/dates";
 import type { CurrentUser } from "@/lib/auth/current-user";
 import {
   CLOSED_TASK_STATUSES,
@@ -11,7 +12,9 @@ import {
 } from "@/lib/constants";
 import { AuditLog, Department, Notification, Project, Task, User } from "@/models";
 import type { ActivityDTO, NotificationDTO, TaskSummaryDTO } from "@/types/dto";
-import { dedupe, headedDepartmentIds, ledDepartmentIds, managedProjectIds, oid, type Filter } from "./scope";
+import { dedupe, headedDepartmentIds, ledDepartmentIds, oid, type Filter } from "./scope";
+import { accessContext } from "./access";
+import { EMPTY_PROGRESS, progressFor } from "./progress.service";
 import { iso, toTaskSummary, toUserRef, USER_REF_FIELDS } from "./mappers";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -227,48 +230,35 @@ export function toActivity(a: any): ActivityDTO {
 
 /* ------------------------------------------------------------------ */
 
-async function projectProgress(projectIds: Types.ObjectId[] | null): Promise<ProjectProgress[]> {
-  const projectFilter: Filter = projectIds ? { _id: { $in: projectIds } } : {};
-  const projects = await Project.find({ ...projectFilter, status: { $nin: ["CANCELLED"] } })
+async function projectProgress(projectIds: Types.ObjectId[]): Promise<ProjectProgress[]> {
+  const projects = await Project.find({ _id: { $in: projectIds }, status: { $nin: ["CANCELLED"] }, isArchived: { $ne: true } })
     .sort({ status: 1, endDate: 1 })
     .limit(12)
     .select("name code status endDate")
     .lean();
-  const ids = projects.map((p) => p._id);
-  const rows = await Task.aggregate<{ _id: Types.ObjectId; total: number; completed: number; cancelled: number }>([
-    { $match: { project: { $in: ids }, parentTask: null } },
-    {
-      $group: {
-        _id: "$project",
-        total: { $sum: 1 },
-        completed: { $sum: { $cond: [{ $eq: ["$status", "COMPLETED"] }, 1, 0] } },
-        cancelled: { $sum: { $cond: [{ $eq: ["$status", "CANCELLED"] }, 1, 0] } },
-      },
-    },
-  ]);
-  const map = new Map(rows.map((r) => [r._id.toString(), r]));
+  const stats = await progressFor(projects.map((p) => p._id));
   return projects.map((p) => {
-    const r = map.get(p._id.toString());
-    const effective = (r?.total ?? 0) - (r?.cancelled ?? 0);
+    const st = stats.get(p._id.toString()) ?? EMPTY_PROGRESS;
     return {
       id: p._id.toString(),
       name: p.name,
       code: p.code,
       status: p.status as ProjectStatus,
       endDate: iso(p.endDate),
-      totalTasks: r?.total ?? 0,
-      completedTasks: r?.completed ?? 0,
-      openTasks: effective - (r?.completed ?? 0),
-      progress: effective > 0 ? Math.round(((r?.completed ?? 0) / effective) * 100) : 0,
+      totalTasks: st.total - st.cancelled,
+      completedTasks: st.completed,
+      openTasks: st.total - st.cancelled - st.completed,
+      progress: st.percent,
     };
   });
 }
 
 async function managerDashboard(user: CurrentUser): Promise<ManagerDashboard> {
-  const projectIds = (await managedProjectIds(user)) ?? [];
+  const ctx = await accessContext(user);
+  const projectIds = [...ctx.managed].map((id) => oid(id));
   const now = new Date();
   const inProjects = { project: { $in: projectIds } };
-  const reviewScope = { $or: [inProjects, { reviewer: oid(user.id) }] };
+  const reviewScope = inProjects;
 
   const [pendingTasks, awaitingReview, upcomingCount, overdueTasks, projects, review, deadlines, statusCounts] =
     await Promise.all([
@@ -398,7 +388,7 @@ async function employeeDashboard(user: CurrentUser): Promise<EmployeeDashboard> 
   const self = oid(user.id);
   const mine = { $or: [{ owner: self }, { collaborators: self }] };
   const now = new Date();
-  const today = { $gte: startOfDay(now), $lte: endOfDay(now) };
+  const today = utcDayRange(now);
 
   const [myOpenTasks, dueToday, inProgress, completed, overdue, todays, myTasks, notifications] = await Promise.all([
     Task.countDocuments({ ...mine, status: { $in: OPEN_TASK_STATUSES } }),

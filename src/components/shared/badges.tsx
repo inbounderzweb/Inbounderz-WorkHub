@@ -32,21 +32,25 @@ export function UserStatusBadge({ status }: { status: UserStatus }) {
 }
 
 const TASK_STATUS_STYLES: Record<TaskStatus, string> = {
+  BACKLOG: "border-slate-200 bg-white text-slate-500",
   TODO: "border-slate-200 bg-slate-50 text-slate-700",
   IN_PROGRESS: "border-sky-200 bg-sky-50 text-sky-700",
+  ON_HOLD: "border-amber-200 bg-amber-50 text-amber-700",
   IN_REVIEW: "border-violet-200 bg-violet-50 text-violet-700",
-  BLOCKED: "border-red-200 bg-red-50 text-red-700",
+  CHANGES_REQUESTED: "border-orange-200 bg-orange-50 text-orange-700",
   COMPLETED: "border-emerald-200 bg-emerald-50 text-emerald-700",
   CANCELLED: "border-slate-200 bg-slate-100 text-slate-500",
 };
 
 export const TASK_STATUS_COLORS: Record<TaskStatus, string> = {
+  BACKLOG: "#cbd5e1",
   TODO: "#94a3b8",
   IN_PROGRESS: "#0ea5e9",
+  ON_HOLD: "#f59e0b",
   IN_REVIEW: "#8b5cf6",
-  BLOCKED: "#ef4444",
+  CHANGES_REQUESTED: "#f97316",
   COMPLETED: "#16a34a",
-  CANCELLED: "#cbd5e1",
+  CANCELLED: "#e2e8f0",
 };
 
 export function TaskStatusBadge({ status }: { status: TaskStatus }) {

@@ -11,8 +11,12 @@ import { cn } from "@/lib/utils";
 import type { EmployeeOptionDTO } from "@/types/dto";
 import { UserAvatar } from "./user-avatar";
 
+/** Picker option: an employee, optionally with a custom subtitle (e.g. project role). */
+export type PickerOption = Pick<EmployeeOptionDTO, "id" | "name" | "email" | "employeeId"> &
+  Partial<Pick<EmployeeOptionDTO, "role" | "status">> & { subtitle?: string };
+
 type BaseProps = {
-  options: EmployeeOptionDTO[] | undefined;
+  options: PickerOption[] | undefined;
   loading?: boolean;
   placeholder?: string;
   disabled?: boolean;
@@ -94,7 +98,7 @@ export function EmployeePicker(props: SingleProps | MultiProps) {
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm">{o.name}</p>
                       <p className="truncate text-xs text-muted-foreground">
-                        {o.employeeId} · {roleName(o.role)}
+                        {o.subtitle ?? `${o.employeeId} · ${roleName(o.role)}`}
                         {o.status === "INACTIVE" ? " · Inactive" : ""}
                       </p>
                     </div>

@@ -155,3 +155,31 @@ export function withPublic<Ctx>(handler: (req: NextRequest, ctx: Ctx) => Promise
     }
   };
 }
+
+/**
+ * For multipart uploads (which browsers can send cross-site without a preflight):
+ * require the Origin header to match this app.
+ */
+export function assertSameOrigin(req: NextRequest): void {
+  const origin = req.headers.get("origin");
+  if (!origin) return; // non-browser clients
+  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
+  try {
+    if (new URL(origin).host !== host) throw forbidden("Cross-origin request blocked");
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    throw forbidden("Cross-origin request blocked");
+  }
+}
+
+/** Reads a single uploaded file from multipart form data. */
+export async function readUpload(req: NextRequest): Promise<File> {
+  assertSameOrigin(req);
+  if (!(req.headers.get("content-type") ?? "").includes("multipart/form-data")) {
+    throw new ApiError(415, "Expected multipart/form-data");
+  }
+  const form = await req.formData().catch(() => null);
+  const file = form?.get("file");
+  if (!file || typeof file === "string") throw badRequest("Attach a file in the 'file' field");
+  return file;
+}

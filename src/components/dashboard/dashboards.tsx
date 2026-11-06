@@ -1,3 +1,4 @@
+import { day } from "@/lib/dates";
 import Link from "next/link";
 import { format, formatDistanceToNow } from "date-fns";
 import {
@@ -50,7 +51,7 @@ export function AdminDashboardView({ data }: { data: AdminData }) {
       <div className={grid4}>
         <StatCard label="Employees" value={s.employees} icon={Users} hint={`${s.activeEmployees} active`} href="/employees" />
         <StatCard label="Departments" value={s.departments} icon={Building2} tone="blue" hint="Active departments" href="/departments" />
-        <StatCard label="Active projects" value={s.activeProjects} icon={FolderKanban} tone="violet" hint="Status: Active" />
+        <StatCard label="Active projects" value={s.activeProjects} icon={FolderKanban} tone="violet" hint="Status: Active" href="/projects" />
         <StatCard label="Total tasks" value={s.totalTasks} icon={ListTodo} tone="slate" hint={`${s.inReview} awaiting review`} />
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
@@ -127,7 +128,7 @@ export function ManagerDashboardView({ data }: { data: ManagerData }) {
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <StatCard label="Managed projects" value={s.managedProjects} icon={FolderKanban} />
+        <StatCard label="Managed projects" value={s.managedProjects} icon={FolderKanban} href="/projects" />
         <StatCard label="Pending tasks" value={s.pendingTasks} icon={Clock} tone="amber" />
         <StatCard label="Awaiting review" value={s.awaitingReview} icon={ClipboardCheck} tone="violet" />
         <StatCard label="Due this week" value={s.upcomingDeadlines} icon={CalendarClock} tone="blue" />
@@ -135,18 +136,18 @@ export function ManagerDashboardView({ data }: { data: ManagerData }) {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-3">
-        <Panel title="Project progress" description="Based on completed top-level tasks" className="xl:col-span-2">
+        <Panel title="Project progress" description="Completed ÷ (all tasks − cancelled)" className="xl:col-span-2" href="/projects">
           {data.projects.length ? (
             <ul className="divide-y">
               {data.projects.map((p) => (
                 <li key={p.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
                   <div className="min-w-0 flex-1">
-                    <p className="flex items-center gap-2 truncate text-sm font-medium">
+                    <Link href={`/projects/${p.id}`} className="flex items-center gap-2 truncate text-sm font-medium hover:text-primary">
                       {p.name} <span className="font-mono text-xs text-muted-foreground">{p.code}</span>
-                    </p>
+                    </Link>
                     <p className="text-xs text-muted-foreground">
                       {p.completedTasks}/{p.completedTasks + p.openTasks} tasks done
-                      {p.endDate ? ` · Due ${format(new Date(p.endDate), "d MMM yyyy")}` : ""}
+                      {p.endDate ? ` · Due ${format(day(p.endDate), "d MMM yyyy")}` : ""}
                     </p>
                   </div>
                   <div className="flex items-center gap-3 sm:w-64">
@@ -167,7 +168,7 @@ export function ManagerDashboardView({ data }: { data: ManagerData }) {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-3">
-        <Panel title="Tasks awaiting review">
+        <Panel title="Tasks awaiting review" href="/tasks">
           <TaskList tasks={data.reviewQueue} emptyTitle="Nothing to review" />
         </Panel>
         <Panel title="Upcoming deadlines" description="Overdue and due within 7 days">
@@ -232,7 +233,7 @@ export function EmployeeDashboardView({ data }: { data: EmployeeData }) {
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <StatCard label="My open tasks" value={s.myOpenTasks} icon={ListTodo} />
+        <StatCard label="My open tasks" value={s.myOpenTasks} icon={ListTodo} href="/my-tasks" />
         <StatCard label="Due today" value={s.dueToday} icon={CalendarClock} tone="amber" />
         <StatCard label="In progress" value={s.inProgress} icon={Loader} tone="blue" />
         <StatCard label="Completed" value={s.completed} icon={CheckCircle2} tone="green" />
@@ -240,7 +241,7 @@ export function EmployeeDashboardView({ data }: { data: EmployeeData }) {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-3">
-        <Panel title="My tasks" description="Open tasks, soonest deadline first" className="xl:col-span-2">
+        <Panel title="My tasks" description="Open tasks, soonest deadline first" className="xl:col-span-2" href="/my-tasks">
           <TaskList tasks={data.myTasks} showOwner={false} emptyTitle="No open tasks" emptyDescription="Tasks assigned to you will show up here." />
         </Panel>
         <Panel title="Today's deadlines">

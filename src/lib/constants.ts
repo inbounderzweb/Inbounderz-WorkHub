@@ -70,10 +70,12 @@ export const PROJECT_MEMBER_ROLES = [
 export type ProjectMemberRole = (typeof PROJECT_MEMBER_ROLES)[number];
 
 export const TASK_STATUSES = [
+  "BACKLOG",
   "TODO",
   "IN_PROGRESS",
+  "ON_HOLD",
   "IN_REVIEW",
-  "BLOCKED",
+  "CHANGES_REQUESTED",
   "COMPLETED",
   "CANCELLED",
 ] as const;
@@ -82,6 +84,19 @@ export const CLOSED_TASK_STATUSES: TaskStatus[] = ["COMPLETED", "CANCELLED"];
 export const OPEN_TASK_STATUSES: TaskStatus[] = TASK_STATUSES.filter(
   (s) => !CLOSED_TASK_STATUSES.includes(s)
 );
+/** Progress buckets (see lib/progress.ts for the full definition). */
+export const IN_PROGRESS_BUCKET: TaskStatus[] = ["IN_PROGRESS", "IN_REVIEW", "CHANGES_REQUESTED"];
+export const PENDING_BUCKET: TaskStatus[] = ["BACKLOG", "TODO", "ON_HOLD"];
+/** Statuses that require every dependency to be resolved first. */
+export const DEPENDENCY_GATED_STATUSES: TaskStatus[] = ["IN_PROGRESS", "IN_REVIEW", "COMPLETED"];
+
+/** Who must approve a task submitted for review. */
+export const APPROVAL_MODES = ["DEPARTMENT", "PROJECT_MANAGER"] as const;
+export type ApprovalMode = (typeof APPROVAL_MODES)[number];
+export const APPROVAL_MODE_LABELS: Record<ApprovalMode, string> = {
+  DEPARTMENT: "Department Head or Team Leader",
+  PROJECT_MANAGER: "Project Manager",
+};
 
 export const TASK_PRIORITIES = ["LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
@@ -109,7 +124,10 @@ export function roleName(key: RoleKey | string | undefined | null): string {
   return ROLE_META[key as RoleKey]?.name ?? key;
 }
 
+const LABEL_OVERRIDES: Record<string, string> = { TODO: "To Do" };
+
 export function humanize(value: string): string {
+  if (LABEL_OVERRIDES[value]) return LABEL_OVERRIDES[value];
   return value
     .toLowerCase()
     .split("_")

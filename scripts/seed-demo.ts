@@ -14,7 +14,7 @@ import { addDays, subDays } from "date-fns";
 import { connectDB } from "@/lib/db";
 import { getRoleByKey, syncRoles } from "@/lib/roles";
 import type { RoleKey, TaskPriority, TaskStatus } from "@/lib/constants";
-import { AuditLog, Department, Milestone, Notification, Project, ProjectMember, Task, TaskActivity, User } from "@/models";
+import { AuditLog, Department, Milestone, nextSequence, Notification, Project, ProjectMember, Task, TaskActivity, User } from "@/models";
 
 const PASSWORD = "Demo@12345";
 
@@ -113,9 +113,9 @@ async function main() {
 
   // Projects + members (separate collection)
   const projects = [
-    { code: "WEB-ACME", name: "Acme Corp Website Revamp", client: "Acme Corp", manager: "pm1", status: "ACTIVE", depts: ["DEV", "DSN", "CNT"], team: ["tlDev", "e1", "e2", "e3", "tlDsn", "e6", "e7"], start: -45, end: 30 },
-    { code: "SEO-NOVA", name: "Nova Retail SEO Growth", client: "Nova Retail", manager: "pm1", status: "ACTIVE", depts: ["SEO", "CNT"], team: ["tlSeo", "e4", "e5", "e8"], start: -20, end: 70 },
-    { code: "APP-ZEN", name: "ZenFit Mobile App", client: "ZenFit", manager: "pm2", status: "PLANNING", depts: ["DEV", "DSN"], team: ["e2", "e6"], start: 5, end: 120 },
+    { code: "PRJ-0001", name: "Acme Corp Website Revamp", client: "Acme Corp", manager: "pm1", status: "ACTIVE", depts: ["DEV", "DSN", "CNT"], team: ["tlDev", "e1", "e2", "e3", "tlDsn", "e6", "e7"], start: -45, end: 30 },
+    { code: "PRJ-0002", name: "Nova Retail SEO Growth", client: "Nova Retail", manager: "pm1", status: "ACTIVE", depts: ["SEO", "CNT"], team: ["tlSeo", "e4", "e5", "e8"], start: -20, end: 70 },
+    { code: "PRJ-0003", name: "ZenFit Mobile App", client: "ZenFit", manager: "pm2", status: "PLANNING", depts: ["DEV", "DSN"], team: ["e2", "e6"], start: 5, end: 120 },
   ] as const;
 
   const projectIds = new Map<string, Types.ObjectId>();
@@ -127,6 +127,9 @@ async function main() {
       description: `${p.name} for ${p.client}.`,
       status: p.status,
       priority: "HIGH",
+      approvalMode: "DEPARTMENT",
+      budget: 25000,
+      notes: "Weekly status call on Mondays.",
       manager: uid(p.manager),
       departments: p.depts.map((d) => did(d)),
       startDate: addDays(now, p.start),
@@ -134,7 +137,7 @@ async function main() {
       createdBy: admin._id,
     });
     projectIds.set(p.code, doc._id);
-    await ProjectMember.create({ project: doc._id, user: uid(p.manager), projectRole: "MANAGER", addedBy: admin._id });
+    await ProjectMember.create({ project: doc._id, user: uid(p.manager), projectRole: "MANAGER", department: null, addedBy: admin._id });
     for (const key of p.team) {
       const u = USERS.find((x) => x.key === key)!;
       await ProjectMember.create({
@@ -154,40 +157,48 @@ async function main() {
   // Tasks with a realistic spread of statuses and due dates
   type T = [string, string, string, TaskStatus, TaskPriority, number | null, string?];
   const tasks: T[] = [
-    ["WEB-ACME", "Set up Next.js project & CI", "e2", "COMPLETED", "HIGH", -30],
-    ["WEB-ACME", "Build homepage hero section", "e1", "IN_PROGRESS", "HIGH", 0],
-    ["WEB-ACME", "Implement navigation & footer", "e1", "IN_REVIEW", "MEDIUM", 2],
-    ["WEB-ACME", "Contact form with CRM integration", "e2", "TODO", "MEDIUM", 6],
-    ["WEB-ACME", "Cross-browser QA pass", "e3", "TODO", "MEDIUM", 12],
-    ["WEB-ACME", "Fix Lighthouse accessibility issues", "e3", "IN_PROGRESS", "URGENT", -2],
-    ["WEB-ACME", "Design system tokens", "e6", "COMPLETED", "HIGH", -20],
-    ["WEB-ACME", "Service page mockups", "e6", "IN_REVIEW", "HIGH", 1],
-    ["WEB-ACME", "Homepage copy", "e7", "COMPLETED", "MEDIUM", -10],
-    ["WEB-ACME", "Case study copy (3 pages)", "e7", "IN_PROGRESS", "MEDIUM", -1],
-    ["WEB-ACME", "Code review: component library", "tlDev", "IN_REVIEW", "MEDIUM", 0],
-    ["SEO-NOVA", "Technical SEO audit", "e4", "COMPLETED", "HIGH", -12],
-    ["SEO-NOVA", "Keyword research — category pages", "e4", "IN_PROGRESS", "HIGH", 0],
-    ["SEO-NOVA", "Fix crawl errors in Search Console", "e5", "BLOCKED", "URGENT", -3],
-    ["SEO-NOVA", "Monthly performance report", "tlSeo", "TODO", "MEDIUM", 5],
-    ["SEO-NOVA", "Blog content calendar", "e8", "IN_REVIEW", "LOW", 3],
-    ["SEO-NOVA", "Backlink outreach batch 1", "e5", "TODO", "MEDIUM", 9],
-    ["APP-ZEN", "Wireframes: onboarding", "e6", "TODO", "MEDIUM", 15],
-    ["APP-ZEN", "API architecture proposal", "e2", "TODO", "HIGH", 10],
+    ["PRJ-0001", "Set up Next.js project & CI", "e2", "COMPLETED", "HIGH", -30],
+    ["PRJ-0001", "Build homepage hero section", "e1", "IN_PROGRESS", "HIGH", 0],
+    ["PRJ-0001", "Implement navigation & footer", "e1", "IN_REVIEW", "MEDIUM", 2],
+    ["PRJ-0001", "Contact form with CRM integration", "e2", "TODO", "MEDIUM", 6],
+    ["PRJ-0001", "Cross-browser QA pass", "e3", "TODO", "MEDIUM", 12],
+    ["PRJ-0001", "Fix Lighthouse accessibility issues", "e3", "IN_PROGRESS", "URGENT", -2],
+    ["PRJ-0001", "Design system tokens", "e6", "COMPLETED", "HIGH", -20],
+    ["PRJ-0001", "Service page mockups", "e6", "IN_REVIEW", "HIGH", 1],
+    ["PRJ-0001", "Homepage copy", "e7", "COMPLETED", "MEDIUM", -10],
+    ["PRJ-0001", "Case study copy (3 pages)", "e7", "IN_PROGRESS", "MEDIUM", -1],
+    ["PRJ-0001", "Code review: component library", "tlDev", "IN_REVIEW", "MEDIUM", 0],
+    ["PRJ-0002", "Technical SEO audit", "e4", "COMPLETED", "HIGH", -12],
+    ["PRJ-0002", "Keyword research — category pages", "e4", "IN_PROGRESS", "HIGH", 0],
+    ["PRJ-0002", "Fix crawl errors in Search Console", "e5", "ON_HOLD", "URGENT", -3],
+    ["PRJ-0002", "Monthly performance report", "tlSeo", "TODO", "MEDIUM", 5],
+    ["PRJ-0002", "Blog content calendar", "e8", "IN_REVIEW", "LOW", 3],
+    ["PRJ-0002", "Backlink outreach batch 1", "e5", "TODO", "MEDIUM", 9],
+    ["PRJ-0003", "Wireframes: onboarding", "e6", "TODO", "MEDIUM", 15],
+    ["PRJ-0003", "API architecture proposal", "e2", "TODO", "HIGH", 10],
   ];
 
   for (const [code, title, ownerKey, status, priority, due] of tasks) {
     const ownerDef = USERS.find((u) => u.key === ownerKey)!;
     const created = await Task.create({
+      taskNumber: `TSK-${String(await nextSequence("taskNumber")).padStart(5, "0")}`,
       title,
       project: projectIds.get(code),
       department: ownerDef.dept ? did(ownerDef.dept) : null,
       owner: uid(ownerKey),
-      collaborators: ownerDef.manager ? [uid(ownerDef.manager)] : [],
-      reviewer: ownerDef.manager ? uid(ownerDef.manager) : null,
+      assignedBy: uid(projects.find((p) => p.code === code)!.manager),
+      collaborators: [],
+      approvalRequired: true,
+      approvalMode: "DEPARTMENT",
+      blocker:
+        title === "Fix crawl errors in Search Console"
+          ? { isBlocked: true, reason: "Waiting for Search Console access from the client.", reportedBy: uid(ownerKey), reportedAt: now }
+          : undefined,
+      checklist: title === "Build homepage hero section" ? [{ text: "Desktop layout", done: true }, { text: "Mobile layout" }, { text: "Animations" }] : [],
       status,
       priority,
       startDate: subDays(now, 14),
-      dueDate: due === null ? null : due === 0 ? new Date(new Date().setHours(18, 0, 0, 0)) : addDays(now, due),
+      dueDate: due === null ? null : new Date(`${addDays(now, due).toISOString().slice(0, 10)}T23:59:59.000Z`),
       completedAt: status === "COMPLETED" ? subDays(now, Math.max(1, -(due ?? -1))) : null,
       estimatedHours: 8,
       createdBy: uid(projects.find((p) => p.code === code)!.manager),
@@ -203,8 +214,12 @@ async function main() {
 
   // A subtask to exercise the parent/child relation
   const parent = await Task.findOne({ title: "Build homepage hero section" });
+  const qa = await Task.findOne({ title: "Cross-browser QA pass" });
+  if (parent && qa) await Task.updateOne({ _id: qa._id }, { $set: { dependencies: [parent._id] } });
   if (parent) {
     await Task.create({
+      taskNumber: `TSK-${String(await nextSequence("taskNumber")).padStart(5, "0")}`,
+      assignedBy: uid("tlDev"),
       title: "Hero animation polish",
       parentTask: parent._id,
       project: parent.project,

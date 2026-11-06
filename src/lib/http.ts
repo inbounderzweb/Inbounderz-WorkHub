@@ -51,3 +51,13 @@ export function qs(params: Record<string, string | number | boolean | null | und
   const s = sp.toString();
   return s ? `?${s}` : "";
 }
+
+/** Multipart file upload to an attachment endpoint. */
+export async function uploadFile<T = unknown>(url: string, file: File): Promise<T> {
+  const body = new FormData();
+  body.append("file", file);
+  const res = await fetch(url, { method: "POST", body, cache: "no-store" });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new ApiClientError(res.status, data?.error ?? `Upload failed (${res.status})`, data?.fieldErrors);
+  return data as T;
+}

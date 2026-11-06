@@ -6,6 +6,8 @@ const nextConfig: NextConfig = {
   cacheComponents: false,
   serverExternalPackages: ["mongoose", "bcryptjs"],
   poweredByHeader: false,
+  // Allows a second local instance (e.g. tests) without clashing build output.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   turbopack: {
     rules: {
       "*.css": {

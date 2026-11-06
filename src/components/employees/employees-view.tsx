@@ -1,5 +1,6 @@
 "use client";
 
+import { day } from "@/lib/dates";
 import Link from "next/link";
 import { useState } from "react";
 import useSWR from "swr";
@@ -248,7 +249,7 @@ export function EmployeesView({
                       {e.reportingManager ? <span className="text-sm">{e.reportingManager.name}</span> : <span className="text-muted-foreground">—</span>}
                     </TableCell>
                     <TableCell className="hidden text-sm text-muted-foreground xl:table-cell">
-                      {e.joiningDate ? format(new Date(e.joiningDate), "d MMM yyyy") : "—"}
+                      {e.joiningDate ? format(day(e.joiningDate), "d MMM yyyy") : "—"}
                     </TableCell>
                     <TableCell>
                       <UserStatusBadge status={e.status} />

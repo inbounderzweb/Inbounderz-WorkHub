@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { Building2, FolderKanban, Search, User } from "lucide-react";
+import { Building2, CheckSquare, FolderKanban, Search, User } from "lucide-react";
 import {
   Command,
   CommandDialog,
@@ -50,7 +50,7 @@ export function GlobalSearch() {
   };
 
   const pages = NAV.flatMap((s) => s.items).filter((i) => !i.permission || hasPermission(user.role, i.permission));
-  const hasResults = !!data && (data.employees.length || data.departments.length || data.projects.length);
+  const hasResults = !!data && (data.employees.length || data.departments.length || data.projects.length || data.tasks.length);
 
   return (
     <>
@@ -60,7 +60,7 @@ export function GlobalSearch() {
         className="flex h-9 w-full min-w-0 max-w-md items-center gap-2 rounded-lg border bg-muted/40 px-3 text-sm text-muted-foreground transition-colors hover:bg-muted"
       >
         <Search className="size-4" />
-        <span className="flex-1 truncate text-left">Search employees, departments…</span>
+        <span className="flex-1 truncate text-left">Search people, projects, tasks…</span>
         <kbd className="hidden rounded border bg-background px-1.5 py-0.5 font-mono text-[10px] sm:inline">⌘K</kbd>
       </button>
 
@@ -114,10 +114,21 @@ export function GlobalSearch() {
               {data!.projects.length ? (
                 <CommandGroup heading="Projects">
                   {data!.projects.map((p) => (
-                    <CommandItem key={p.id} value={`proj-${p.id}`} disabled>
+                    <CommandItem key={p.id} value={`proj-${p.id}`} onSelect={() => go(`/projects/${p.id}`)}>
                       <FolderKanban />
                       <span className="flex-1 truncate">{p.name}</span>
-                      <span className="text-xs text-muted-foreground">Project pages arrive with the Projects module</span>
+                      <span className="font-mono text-xs text-muted-foreground">{p.code}</span>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              ) : null}
+              {data!.tasks.length ? (
+                <CommandGroup heading="Tasks">
+                  {data!.tasks.map((t) => (
+                    <CommandItem key={t.id} value={`task-${t.id}`} onSelect={() => go(`/tasks/${t.id}`)}>
+                      <CheckSquare />
+                      <span className="flex-1 truncate">{t.title}</span>
+                      <span className="font-mono text-xs text-muted-foreground">{t.taskNumber}</span>
                     </CommandItem>
                   ))}
                 </CommandGroup>

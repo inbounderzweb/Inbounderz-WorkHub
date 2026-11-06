@@ -1,7 +1,7 @@
 import "server-only";
 import { Types } from "mongoose";
 import type { CurrentUser } from "@/lib/auth/current-user";
-import { Department, Project, ProjectMember } from "@/models";
+import { Department } from "@/models";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Filter = Record<string, any>;
@@ -70,34 +70,6 @@ export async function employeeVisibilityFilter(user: CurrentUser): Promise<Filte
     default:
       return { _id: self };
   }
-}
-
-/** Projects visible to the user. `null` means all. */
-export async function visibleProjectIds(user: CurrentUser): Promise<Types.ObjectId[] | null> {
-  if (user.role === "SUPER_ADMIN") return null;
-  const self = oid(user.id);
-  const [managed, memberships] = await Promise.all([
-    Project.find({ manager: self }).select("_id").lean(),
-    ProjectMember.find({ user: self, isActive: true }).select("project").lean(),
-  ]);
-  const ids = [...managed.map((p) => p._id), ...memberships.map((m) => m.project)];
-  if (user.role === "DEPARTMENT_HEAD") {
-    const depts = await headedDepartmentIds(user.id);
-    const deptProjects = await Project.find({ departments: { $in: depts } }).select("_id").lean();
-    ids.push(...deptProjects.map((p) => p._id));
-  }
-  return dedupe(ids);
-}
-
-/** Projects the user manages (as Project.manager or a MANAGER project member). */
-export async function managedProjectIds(user: CurrentUser): Promise<Types.ObjectId[] | null> {
-  if (user.role === "SUPER_ADMIN") return null;
-  const self = oid(user.id);
-  const [managed, memberships] = await Promise.all([
-    Project.find({ manager: self }).select("_id").lean(),
-    ProjectMember.find({ user: self, isActive: true, projectRole: "MANAGER" }).select("project").lean(),
-  ]);
-  return dedupe([...managed.map((p) => p._id), ...memberships.map((m) => m.project)]);
 }
 
 export function dedupe(ids: Types.ObjectId[]): Types.ObjectId[] {

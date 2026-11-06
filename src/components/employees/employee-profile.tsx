@@ -1,5 +1,6 @@
 "use client";
 
+import { day } from "@/lib/dates";
 import Link from "next/link";
 import { useState } from "react";
 import useSWR from "swr";
@@ -155,7 +156,7 @@ export function EmployeeProfile({
           </InfoRow>
           <InfoRow icon={Briefcase} label="Role">{e.role?.name ?? "—"}</InfoRow>
           <InfoRow icon={CalendarDays} label="Joining date">
-            {e.joiningDate ? format(new Date(e.joiningDate), "d MMMM yyyy") : "—"}
+            {e.joiningDate ? format(day(e.joiningDate), "d MMMM yyyy") : "—"}
           </InfoRow>
           <InfoRow icon={Clock} label="Last sign-in">
             {e.lastLoginAt ? formatDistanceToNow(new Date(e.lastLoginAt), { addSuffix: true }) : "Never"}

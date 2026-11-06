@@ -15,7 +15,30 @@ import mongoose from "mongoose";
 import { connectDB } from "@/lib/db";
 import { getRoleByKey, syncRoles } from "@/lib/roles";
 import { passwordSchema } from "@/lib/validations/common";
-import { User } from "@/models";
+import { nextSequence, Project, Task, User } from "@/models";
+
+/** Idempotent data migrations for databases created by earlier versions. */
+async function migrate() {
+  const tasks = Task.collection;
+  // v1.1: BLOCKED status → ON_HOLD + blocker flag
+  const blocked = await tasks.updateMany(
+    { status: "BLOCKED" },
+    { $set: { status: "ON_HOLD", "blocker.isBlocked": true, "blocker.reason": "Migrated from Blocked status", "blocker.reportedAt": new Date() } }
+  );
+  // v1.1: loggedHours → actualHours, reviewer removed
+  await tasks.updateMany({ loggedHours: { $exists: true } }, [
+    { $set: { actualHours: { $cond: [{ $gt: ["$loggedHours", 0] }, "$loggedHours", null] } } },
+    { $unset: ["loggedHours", "reviewer"] },
+  ]);
+  // v1.1: every task needs a unique task number
+  let numbered = 0;
+  for await (const t of tasks.find({ taskNumber: { $exists: false } }).sort({ createdAt: 1 })) {
+    await tasks.updateOne({ _id: t._id }, { $set: { taskNumber: `TSK-${String(await nextSequence("taskNumber")).padStart(5, "0")}`, assignedBy: t.createdBy ?? null } });
+    numbered++;
+  }
+  await Project.collection.updateMany({ approvalMode: { $exists: false } }, { $set: { approvalMode: "DEPARTMENT", isArchived: false } });
+  if (blocked.modifiedCount || numbered) console.log(`✓ Migrated ${blocked.modifiedCount} blocked task(s), numbered ${numbered} task(s)`);
+}
 
 async function main() {
   const name = process.env.SUPER_ADMIN_NAME?.trim() || "Super Admin";
@@ -34,6 +57,7 @@ async function main() {
 
   await connectDB();
   await syncRoles();
+  await migrate();
   await Promise.all(Object.values(mongoose.models).map((m) => m.syncIndexes()));
   console.log("✓ Roles and indexes synced");
 

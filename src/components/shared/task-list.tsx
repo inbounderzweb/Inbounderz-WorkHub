@@ -1,3 +1,5 @@
+import { day } from "@/lib/dates";
+import Link from "next/link";
 import { format } from "date-fns";
 import { CalendarClock } from "lucide-react";
 import type { TaskSummaryDTO } from "@/types/dto";
@@ -23,7 +25,8 @@ export function TaskList({
   return (
     <ul className="divide-y">
       {tasks.map((t) => (
-        <li key={t.id} className="flex items-center gap-3 px-4 py-3">
+        <li key={t.id}>
+          <Link href={`/tasks/${t.id}`} className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/40">
           {showOwner && t.owner ? <UserAvatar name={t.owner.name} size="sm" /> : null}
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium">{t.title}</p>
@@ -38,10 +41,11 @@ export function TaskList({
             {t.dueDate ? (
               <span className={cn("tabular text-xs", t.isOverdue ? "font-medium text-red-600" : "text-muted-foreground")}>
                 {t.isOverdue ? "Overdue · " : "Due "}
-                {format(new Date(t.dueDate), "d MMM")}
+                {format(day(t.dueDate), "d MMM")}
               </span>
             ) : null}
           </div>
+          </Link>
         </li>
       ))}
     </ul>

@@ -6,6 +6,8 @@ const TaskCommentSchema = new Schema(
     task: { type: Schema.Types.ObjectId, ref: "Task", required: true },
     author: { type: Schema.Types.ObjectId, ref: "User", required: true },
     body: { type: String, required: true, trim: true, maxlength: 5000 },
+    /** REVIEW = feedback attached to a review decision; BLOCKER = blocker report. */
+    kind: { type: String, enum: ["COMMENT", "REVIEW", "BLOCKER"], default: "COMMENT" },
     mentions: [{ type: Schema.Types.ObjectId, ref: "User" }],
     attachments: [{ type: Schema.Types.ObjectId, ref: "Attachment" }],
     editedAt: { type: Date, default: null },

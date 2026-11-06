@@ -1,4 +1,7 @@
 import type {
+  ApprovalMode,
+  MilestoneStatus,
+  ProjectMemberRole,
   DepartmentStatus,
   NotificationType,
   ProjectStatus,
@@ -145,4 +148,184 @@ export type SearchResultDTO = {
   employees: { id: string; name: string; email: string; employeeId: string; department: string | null }[];
   departments: { id: string; name: string; code: string; color: string }[];
   projects: { id: string; name: string; code: string; status: ProjectStatus }[];
+  tasks: { id: string; taskNumber: string; title: string; status: TaskStatus }[];
+};
+
+/* ------------------------------------------------------------------ */
+/* Projects & tasks                                                    */
+/* ------------------------------------------------------------------ */
+
+export type ProgressDTO = {
+  total: number;
+  completed: number;
+  inProgress: number;
+  pending: number;
+  cancelled: number;
+  overdue: number;
+  percent: number;
+};
+
+export type ProjectDTO = {
+  id: string;
+  code: string;
+  name: string;
+  client: string;
+  description: string;
+  status: ProjectStatus;
+  priority: TaskPriority;
+  manager: UserRef | null;
+  departments: DepartmentRef[];
+  startDate: string | null;
+  endDate: string | null;
+  budget: number | null;
+  approvalMode: ApprovalMode;
+  isArchived: boolean;
+  memberCount: number;
+  progress: ProgressDTO;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ProjectMemberDTO = {
+  id: string;
+  user: UserRef & { status: UserStatus; employeeId: string };
+  department: DepartmentRef | null;
+  projectRole: ProjectMemberRole;
+  allocationPercent: number;
+  isActive: boolean;
+  joinedAt: string;
+  leftAt: string | null;
+  openTasks: number;
+};
+
+export type MilestoneDTO = {
+  id: string;
+  title: string;
+  description: string;
+  dueDate: string | null;
+  status: MilestoneStatus;
+  completedAt: string | null;
+  taskCount: number;
+  completedTaskCount: number;
+};
+
+export type AttachmentDTO = {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  url: string;
+  uploadedBy: UserRef | null;
+  createdAt: string;
+  canDelete: boolean;
+};
+
+export type ProjectDetailDTO = ProjectDTO & {
+  notes: string;
+  members: ProjectMemberDTO[];
+  formerMembers: ProjectMemberDTO[];
+  milestones: MilestoneDTO[];
+  documents: AttachmentDTO[];
+  timeline: { id: string; taskNumber: string; title: string; status: TaskStatus; startDate: string | null; dueDate: string | null; owner: string | null }[];
+  can: { edit: boolean; manageTeam: boolean; archive: boolean; createTask: boolean; taskDepartments: string[] };
+};
+
+export type ProjectOptionDTO = {
+  id: string;
+  code: string;
+  name: string;
+  status: ProjectStatus;
+  isArchived: boolean;
+  departments: DepartmentRef[];
+  approvalMode: ApprovalMode;
+  /** Departments where the viewer may create tasks. */
+  taskDepartments: string[];
+};
+
+export type TeamMemberOptionDTO = {
+  id: string;
+  name: string;
+  email: string;
+  employeeId: string;
+  designation: string;
+  departmentId: string | null;
+  projectRole: ProjectMemberRole;
+};
+
+export type TaskListItemDTO = {
+  id: string;
+  taskNumber: string;
+  title: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  project: { id: string; name: string; code: string } | null;
+  department: DepartmentRef | null;
+  owner: UserRef | null;
+  assignedBy: UserRef | null;
+  startDate: string | null;
+  dueDate: string | null;
+  isOverdue: boolean;
+  isBlocked: boolean;
+  parentTask: { id: string; taskNumber: string; title: string } | null;
+  subtaskCount: number;
+  checklist: { total: number; done: number };
+  approvalRequired: boolean;
+  allowedStatuses: TaskStatus[];
+  updatedAt: string;
+};
+
+export type TaskRefDTO = { id: string; taskNumber: string; title: string; status: TaskStatus };
+
+export type TaskCommentDTO = {
+  id: string;
+  body: string;
+  kind: "COMMENT" | "REVIEW" | "BLOCKER";
+  author: UserRef | null;
+  createdAt: string;
+  attachments: AttachmentDTO[];
+};
+
+export type TaskActivityDTO = {
+  id: string;
+  action: string;
+  message: string;
+  from: unknown;
+  to: unknown;
+  actor: UserRef | null;
+  createdAt: string;
+};
+
+export type TaskDetailDTO = TaskListItemDTO & {
+  description: string;
+  collaborators: UserRef[];
+  createdBy: UserRef | null;
+  milestone: { id: string; title: string } | null;
+  estimatedHours: number | null;
+  actualHours: number | null;
+  completedAt: string | null;
+  approvalMode: ApprovalMode;
+  submittedAt: string | null;
+  approvedBy: UserRef | null;
+  approvedAt: string | null;
+  blocker: { isBlocked: boolean; reason: string; reportedBy: UserRef | null; reportedAt: string | null };
+  checklistItems: { id: string; text: string; done: boolean; doneBy: UserRef | null; doneAt: string | null }[];
+  dependencies: TaskRefDTO[];
+  dependents: TaskRefDTO[];
+  subtasks: (TaskRefDTO & { owner: UserRef | null; dueDate: string | null })[];
+  unresolvedDependencies: number;
+  openSubtasks: number;
+  attachments: AttachmentDTO[];
+  comments: TaskCommentDTO[];
+  activity: TaskActivityDTO[];
+  can: {
+    edit: boolean;
+    reassign: boolean;
+    review: boolean;
+    comment: boolean;
+    updateChecklist: boolean;
+    upload: boolean;
+    reportBlocker: boolean;
+    logHours: boolean;
+    addSubtask: boolean;
+  };
 };
