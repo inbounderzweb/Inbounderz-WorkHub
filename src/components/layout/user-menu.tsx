@@ -15,7 +15,6 @@ import {
 import { UserAvatar } from "@/components/shared/user-avatar";
 import { RoleBadge } from "@/components/shared/badges";
 import { useCurrentUser } from "@/components/providers/user-provider";
-import { hasPermission } from "@/lib/permissions";
 
 export function UserMenu() {
   const user = useCurrentUser();
@@ -43,7 +42,7 @@ export function UserMenu() {
             <UserCircle /> My profile
           </Link>
         </DropdownMenuItem>
-        {hasPermission(user.role, "settings:manage") ? (
+        {user.permissions.includes("settings:manage") ? (
           <DropdownMenuItem asChild>
             <Link href="/settings">
               <Settings /> Settings

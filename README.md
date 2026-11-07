@@ -2,12 +2,12 @@
 
 Internal company platform for managing employees, departments, projects, tasks and work progress with role-based access.
 
-**Status: Day 1 complete.**
+**Status: Day 2 complete (all planned modules).**
 
-- **Part 1:** authentication, roles and permissions, employee and department management, role-specific dashboards.
-- **Part 2:** project management with department allocation, task management (My Tasks list / board / calendar), subtasks, dependencies, checklists, comments, attachments, and the review workflow.
-
-**Next (Day 2):** internal department tickets, then Daily Updates.
+- **Day 1 · Part 1:** authentication, roles and permissions, employee and department management, role-specific dashboards.
+- **Day 1 · Part 2:** project management with department allocation, task management (My Tasks list / board / calendar), subtasks, dependencies, checklists, comments, attachments, and the review workflow.
+- **Day 2 · Part 1:** internal department tickets (My Tickets, Ticket Management, assignment, ticket ⇄ task integration, resolution review, activity history).
+- **Day 2 · Part 2:** notification system (triggers, preferences, deadline reminders), Daily Work Updates with review, work calendar, reports & analytics with CSV export, audit log, system settings.
 
 ## Tech stack
 
@@ -30,6 +30,8 @@ npm run dev                     # http://localhost:3000
 | `AUTH_SECRET` | Session encryption secret. Generate it with `openssl rand -base64 33` |
 | `AUTH_URL` | Public base URL of the app (used in password-reset links) |
 | `STORAGE_DIR` | *(optional)* Where uploaded files are stored. Default: `./storage/uploads` |
+| `AUTH_TRUST_HOST` | Set to `true` behind a proxy / on hosting platforms |
+| `CRON_SECRET` | *(optional)* Enables `GET /api/cron/reminders` for an external scheduler (`Authorization: Bearer <secret>`). Without it, reminders still run automatically while people use the app |
 | `SUPER_ADMIN_NAME` / `_EMAIL` / `_PASSWORD` / `_EMPLOYEE_ID` | Used **only** by `npm run seed` to create the first Super Admin |
 
 ### Upgrading an existing database
@@ -66,6 +68,22 @@ All demo accounts use the password `Demo@12345`:
 | Department Head (Development) | `head.dev@inbounderz.com` |
 | Team Leader (Development) | `lead.dev@inbounderz.com` |
 | Employee | `employee@inbounderz.com` |
+
+## Deployment
+
+1. **Database:** create a MongoDB Atlas cluster, a database user, and network access for your host. Use a `MONGODB_URI` that includes the database name.
+2. **Environment:** set `MONGODB_URI`, `AUTH_SECRET`, `AUTH_URL` (the public https URL), `AUTH_TRUST_HOST=true` and optionally `CRON_SECRET`. Set the `SUPER_ADMIN_*` values for the first seed only.
+3. **Build and seed:**
+   ```bash
+   npm ci
+   npm run build
+   npm run seed        # roles, indexes (incl. the one-task-per-ticket and one-report-per-day indexes), migrations, Super Admin
+   npm run start       # or your platform's start command
+   ```
+   Re-run `npm run seed` after every upgrade. It's idempotent.
+4. **File storage:** attachments are written to local disk (`STORAGE_DIR`). That works on a single VM or container with a persistent volume. For serverless or multiple instances (e.g. Vercel), implement the `StorageDriver` interface in `src/lib/storage.ts` for S3, R2 or GCS first.
+5. **Reminders (optional):** schedule `GET /api/cron/reminders` with `Authorization: Bearer $CRON_SECRET` every 15 minutes, e.g. Vercel Cron or any uptime pinger that can send headers.
+6. **First sign-in:** sign in as the seeded Super Admin, change the password, fill in **Settings → Company**, then create departments and users.
 
 ## Scripts
 
@@ -110,7 +128,7 @@ Every mutation writes an `AuditLog` entry, and relevant users receive in-app `No
 
 ### Data model
 
-`User`, `Role`, `Department`, `Project`, `ProjectMember`, `Task`, `Milestone`, `TaskComment`, `TaskActivity`, `DailyUpdate`, `Attachment`, `Notification`, `AuditLog`
+`User`, `Role`, `Department`, `Project`, `ProjectMember`, `Task`, `Milestone`, `TaskComment`, `TaskActivity`, `DailyUpdate`, `Attachment`, `Notification`, `AuditLog`, `Ticket`, `TicketCategory`, `TicketComment`, `TicketActivity`, `SystemSetting`
 
 - Each employee has exactly one **primary department** (`User.department`). A department lists its members by query rather than storing an embedded array.
 - Project teams live in the separate **`ProjectMember`** collection (unique per `project + user`), never embedded in `Project`.
@@ -190,6 +208,111 @@ An archived project and its tasks become read-only, and the project is hidden fr
 - **Downloads:** go through `/api/attachments/:id`, which checks the viewer's access to the task or project first.
 - **Storage:** files are stored on local disk by default (`src/lib/storage.ts`). For serverless or multi-server hosting, implement the same small interface on S3/R2.
 
+## Internal tickets
+
+Employees request help from another department (e.g. Web Development asks Design for a banner). A Project Manager reviews the request and assigns someone, and that person gets the work in **My Tasks**.
+
+### Workflow
+
+1. An employee raises a ticket from **My Tickets**. The ticket number (`TKT-0001`) is generated, and the requester and requesting department are taken from the signed-in user's profile. Anything sent by the client for those fields is ignored.
+2. The ticket starts as **New**. The managing Project Manager(s) and the target department's head are notified.
+3. The Project Manager opens it in **Ticket Management**, reviews it, picks the department (only its active employees are offered, each with their open-task count), picks the employee, and confirms. The ticket becomes **Assigned**.
+4. The assignee is notified and a linked work item appears in their My Tasks, labelled **Internal Request · TKT-0001**.
+5. The assignee starts work, uploads deliverables and submits the ticket as **Resolved**.
+6. The requester reviews the deliverables, then either **confirms completion** (ticket **Closed**, task **Completed**, closure details stored) or **requests changes** (ticket **Changes Requested**, task back to an actionable status, assignee notified).
+
+Either side can ask for more information (**Waiting for Information**). Work resumes where it left off once the requester answers. Project Managers can reject a ticket, reassign it (the full assignment history is kept), close a resolved ticket on the requester's behalf, and reopen a ticket. A requester can reopen their own closed ticket within 14 days.
+
+The allowed transitions are defined in `src/lib/ticket-workflow.ts`. The server enforces them and the UI only shows valid actions.
+
+### Ticket ⇄ task integration (no duplicate records)
+
+- The **ticket is the single source of truth**. On first assignment one `Task` is created with `sourceType: "internal_ticket"` and `linkedTicket`, and the ticket stores `linkedTask`. A unique partial index on `Task.linkedTicket` makes a second task for the same ticket impossible. Reassignment, and assigning a ticket again after it was rejected and reopened, update that same task.
+- `syncLinkedTask()` in `services/ticket.service.ts` is the only code that writes a linked task's status, owner, department, deadline and priority. It derives them from the ticket: Assigned → To Do, In Progress → In Progress, Waiting → On Hold, Resolved → In Review, Changes Requested → Changes Requested, Closed → Completed, Rejected → Cancelled. It runs after every ticket change and also when a ticket is opened, so a request that was interrupted repairs itself.
+- Task endpoints don't bypass the ticket. *Start work* from My Tasks calls the ticket workflow. Editing, reassigning, reviewing or moving the status of a linked task any other way is refused with a pointer to the ticket. `/tasks/:id` for a linked task redirects to its ticket.
+- Linked tasks have no project, so they never affect project progress. Normal project tasks work exactly as before.
+
+### Who can do what
+
+| | Ticket access |
+| --- | --- |
+| Employee (any role) | Raise tickets. See only the tickets they raised, plus tickets assigned to them. Reply to info requests, confirm or request changes |
+| Assignee | Start work, ask for information, upload deliverables, submit as resolved. Former assignees keep read-only access |
+| Project Manager | Manage tickets with no related project, and tickets related to projects they manage: review, assign, reassign, reject, edit priority/date/category, intervene |
+| Department Head | Monitor (read and comment on) tickets sent to or raised by departments they head |
+| Super Admin | Everything. Also configures ticket categories under **Settings → Ticket categories** |
+
+Categories are deactivated, never deleted, and each ticket stores the category name at creation, so history doesn't change. The six default categories are created automatically the first time categories are needed.
+
+## Notifications
+
+All notifications are stored in MongoDB (`notifications`). The bell shows the unread count and the latest items and refreshes every minute. The **Notifications** page lists the full history, with type filters, mark-as-read, mark-all-read and delete. Clicking a notification opens the related project, task, ticket or daily report.
+
+- **Triggers:**
+  - **Project:** project created (manager), employee added, employee removed, deadline approaching.
+  - **Task:** assigned, reassigned, status changed (to the owner, or to whoever assigned it), review requested, changes requested, approved, due soon, overdue.
+  - **Ticket:** submitted, assigned, reassigned, started, more information requested, resolved, changes requested, closed (plus rejected, reopened and comments).
+  - **Daily reports:** submitted, resubmitted, approved, changes requested.
+- **Who receives them:** only people who already have access to the record are notified. Actors never notify themselves.
+- **Preferences:** each user can switch categories off under Notifications → Preferences. New work assigned to them, review decisions on their work and requests that need their answer are always delivered.
+- **Deadline reminders:** reminders are created by a sweep with a unique `dedupeKey`, so each one is delivered exactly once. The sweep runs automatically at most every 10 minutes, triggered by the bell's normal polling, so no scheduler is required. For reminders when nobody is signed in, call `GET /api/cron/reminders` with `Authorization: Bearer $CRON_SECRET`, for example from Vercel Cron every 15 minutes. Lead times are set under Settings → Notifications.
+- **Real-time delivery:** there's no push (e.g. Socket.IO) yet; the app polls the database instead.
+
+## Daily work updates
+
+- **One report per item per day:** an employee files one report per **day + project + (optional) task**: work completed, pending work, blockers, hours and attachments. A unique index (`one_report_per_work_item_per_day`) refuses duplicates. The form then offers to open the existing report so it can be edited instead.
+- **Validation:** reports can't be future-dated, can't go back further than the configured number of days (default 7), and can't push the day's total over the daily hour limit (default 16). Employees can only report on projects they're allocated to, and on tasks they own or collaborate on.
+- **Review:** the author's **Department Head** approves or requests changes. A comment is required when requesting changes. A Department Head's own reports go to the Super Admin. Team Leaders can be given review rights in Settings.
+  - **Editing after changes are requested** resubmits the report as a new revision and notifies the reviewer.
+  - **Approved reports are locked,** including their attachments.
+  - **Deleting** is only possible before the first review.
+- **Overview:** Project Managers see reports on their projects read-only. Team Leaders see their team's reports.
+- **Summaries:** daily and weekly (Mon–Sun) hours per employee, review status, blockers, and team members who haven't reported.
+
+## Calendar
+
+Shows project deadlines, task due dates, ticket due dates and milestones, in month or week view (week by default on phones). Filters cover event type, "only mine", "overdue only" and jump to month. Clicking an event shows its details and a link, and an **Overdue** panel lists late tasks and tickets. Events use exactly the same visibility rules as the project, task and ticket lists.
+
+## Reports & analytics
+
+All figures are aggregated live from MongoDB. Nothing is hard-coded. What you see depends on your report permissions:
+
+| Section | Who | Contents |
+| --- | --- | --- |
+| Company | Super Admin (`report:company`) | project statistics, average progress, task totals (completed / pending / overdue), project completion, task status distribution, department workload, employee task distribution, monthly trend, internal ticket statistics (incl. average time to assign / close), department performance table, filter by department |
+| My projects | Project Manager (`report:project`) | managed-project progress, department task performance, project & milestone deadlines, ticket assignment performance per assignee, completion rate, trend |
+| My department | Department Head (`report:department`) | department task statistics, employee workload, completed / overdue, internal requests received, daily-report activity |
+| My work | everyone | personal task statistics, status distribution, trend, daily work history (hours per day, 30 days) |
+
+Every chart has a **Table** view with the exact numbers. **Export CSV** covers tasks, projects, tickets, daily updates, department performance and employee workload. Exports are UTF-8 with a BOM so they open correctly in Excel, are protected against formula injection, include only rows you can access, and are recorded in the audit log.
+
+## Audit log
+
+The **Audit Log** page (`audit:read`, Super Admin by default) lists who did what and when. Entries can be filtered by entity and date, and expanded to show field-level changes. It covers:
+
+- user creation, update, role change, activation and deactivation;
+- department leadership;
+- project creation, updates and team changes;
+- task creation, assignment and status changes, approvals and change requests;
+- ticket creation, assignment and every workflow step, rejection, closure and reopening;
+- daily-report review decisions;
+- ticket categories;
+- settings and permission changes;
+- report exports.
+
+## System settings (Super Admin)
+
+| Tab | What it does | Safeguards |
+| --- | --- | --- |
+| Company | name, legal name, contacts, address, timezone ("today" for reports and reminders) | timezone is validated |
+| Users & roles | user counts per role, link to user management, **permission settings** | only a whitelist of non-structural permissions (reports, audit, daily-update review/submit, ticket create/monitor, directory read) can be granted or revoked; structural permissions and Super Admin are locked |
+| Workflow | task status labels, optional statuses, priority labels and default ticket response times, default priority, daily-update rules | core statuses can't be disabled; an optional status (Backlog) can only be switched off when no task is in it; labels must be unique |
+| Ticket categories | add, rename, deactivate | categories are never deleted; tickets keep the name they were created with |
+| Notifications | reminder lead times | each user's own preferences are on the Notifications page |
+| Audit log | same as the Audit Log page | read-only |
+
+Settings are cached for 15 seconds per server instance and applied to every permission check, so changes take effect without a restart.
+
 ## Roles and permissions
 
 The matrix is defined in `src/lib/permissions.ts`, synced to the `roles` collection, and **enforced on the server** on every request. The sidebar only reflects it. Super Admins can view the matrix under **Settings → Roles & permissions**.
@@ -223,5 +346,8 @@ Safeguards:
 ## Known limitations
 
 - **Password-reset email delivery is not wired up yet.** The reset link is written to the server log. Plug a mail provider into `src/app/api/account/forgot-password/route.ts`. In the meantime, a Super Admin can reset any employee's password from that employee's profile.
-- Internal tickets (Day 2) and Daily Updates have no screens yet. The dashboards' ticket panels say so instead of showing numbers.
+- There is no email delivery. All notifications are in-app only. Real-time push (Socket.IO) isn't implemented; the bell polls every 60 s.
+- CSV is the only export format. PDF and Excel export aren't implemented.
+- Task status *labels* can be renamed, but the workflow states themselves are fixed in code (`src/lib/task-workflow.ts`), so existing records can't be invalidated.
+- The calendar has month and week views, but no day/agenda view and no drag-to-reschedule.
 - Attachments use local-disk storage. Switch the storage driver before deploying to serverless hosting.

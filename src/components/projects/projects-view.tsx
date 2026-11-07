@@ -1,5 +1,6 @@
 "use client";
 
+import { PriorityLabel } from "@/components/shared/labels";
 import { day } from "@/lib/dates";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -84,7 +85,7 @@ export function ProjectsView() {
               <SelectTrigger className="w-full sm:w-36" aria-label="Priority"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL}>All priorities</SelectItem>
-                {TASK_PRIORITIES.map((s) => <SelectItem key={s} value={s}>{humanize(s)}</SelectItem>)}
+                {TASK_PRIORITIES.map((s) => <SelectItem key={s} value={s}><PriorityLabel value={s} /></SelectItem>)}
               </SelectContent>
             </Select>
             <Select value={department || ALL} onValueChange={set(setDepartment)}>

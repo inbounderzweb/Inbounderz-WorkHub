@@ -51,6 +51,10 @@ export function toTaskSummary(t: any): TaskSummaryDTO {
         ? { id: t.project._id.toString(), name: t.project.name, code: t.project.code }
         : null,
     isOverdue: isOverdue(t),
+    ticket:
+      t.linkedTicket && typeof t.linkedTicket === "object" && "ticketNumber" in t.linkedTicket
+        ? { id: t.linkedTicket._id.toString(), ticketNumber: t.linkedTicket.ticketNumber }
+        : null,
   };
 }
 

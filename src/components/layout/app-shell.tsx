@@ -7,6 +7,7 @@ import { SWRConfig } from "swr";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { UserProvider, type ClientUser } from "@/components/providers/user-provider";
+import type { PublicSettings } from "@/lib/settings-types";
 import { Sidebar, SidebarNav } from "./sidebar";
 import { Logo } from "./logo";
 import { GlobalSearch } from "./global-search";
@@ -15,7 +16,7 @@ import { UserMenu } from "./user-menu";
 
 const COLLAPSE_KEY = "workhub.sidebar.collapsed";
 
-export function AppShell({ user, children }: { user: ClientUser; children: React.ReactNode }) {
+export function AppShell({ user, settings, children }: { user: ClientUser; settings: PublicSettings; children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const pathname = usePathname();
@@ -36,7 +37,7 @@ export function AppShell({ user, children }: { user: ClientUser; children: React
     });
 
   return (
-    <UserProvider user={user}>
+    <UserProvider user={user} settings={settings}>
       <SWRConfig value={{ revalidateOnFocus: false, shouldRetryOnError: false }}>
         <div className="flex min-h-dvh">
           <Sidebar collapsed={collapsed} onToggle={toggle} />

@@ -81,6 +81,11 @@ export const TASK_STATUSES = [
 ] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export const CLOSED_TASK_STATUSES: TaskStatus[] = ["COMPLETED", "CANCELLED"];
+/**
+ * Statuses an administrator may switch off. ON_HOLD stays on: internal tickets
+ * waiting for information map their task to it.
+ */
+export const OPTIONAL_TASK_STATUSES: TaskStatus[] = ["BACKLOG"];
 export const OPEN_TASK_STATUSES: TaskStatus[] = TASK_STATUSES.filter(
   (s) => !CLOSED_TASK_STATUSES.includes(s)
 );
@@ -89,6 +94,9 @@ export const IN_PROGRESS_BUCKET: TaskStatus[] = ["IN_PROGRESS", "IN_REVIEW", "CH
 export const PENDING_BUCKET: TaskStatus[] = ["BACKLOG", "TODO", "ON_HOLD"];
 /** Statuses that require every dependency to be resolved first. */
 export const DEPENDENCY_GATED_STATUSES: TaskStatus[] = ["IN_PROGRESS", "IN_REVIEW", "COMPLETED"];
+
+export const DAILY_UPDATE_STATUSES = ["SUBMITTED", "APPROVED", "CHANGES_REQUESTED"] as const;
+export type DailyUpdateStatus = (typeof DAILY_UPDATE_STATUSES)[number];
 
 /** Who must approve a task submitted for review. */
 export const APPROVAL_MODES = ["DEPARTMENT", "PROJECT_MANAGER"] as const;
@@ -104,6 +112,55 @@ export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 export const MILESTONE_STATUSES = ["PENDING", "IN_PROGRESS", "COMPLETED", "MISSED"] as const;
 export type MilestoneStatus = (typeof MILESTONE_STATUSES)[number];
 
+/** Where a task came from. Internal-request tasks are driven by their ticket. */
+export const TASK_SOURCE_TYPES = ["project", "internal_ticket"] as const;
+export type TaskSourceType = (typeof TASK_SOURCE_TYPES)[number];
+
+/* ----------------------------- Internal tickets ---------------------------- */
+
+export const TICKET_STATUSES = [
+  "NEW",
+  "UNDER_REVIEW",
+  "ASSIGNED",
+  "IN_PROGRESS",
+  "WAITING_FOR_INFO",
+  "RESOLVED",
+  "CHANGES_REQUESTED",
+  "CLOSED",
+  "REJECTED",
+] as const;
+export type TicketStatus = (typeof TICKET_STATUSES)[number];
+/** Final states: nothing is pending on anyone. */
+export const FINAL_TICKET_STATUSES: TicketStatus[] = ["CLOSED", "REJECTED"];
+/** States in which the ticket can't be overdue (work delivered or finished). */
+export const NOT_OVERDUE_TICKET_STATUSES: TicketStatus[] = ["RESOLVED", "CLOSED", "REJECTED"];
+export const OPEN_TICKET_STATUSES: TicketStatus[] = TICKET_STATUSES.filter((s) => !FINAL_TICKET_STATUSES.includes(s));
+
+export const TICKET_STATUS_LABELS: Record<TicketStatus, string> = {
+  NEW: "New",
+  UNDER_REVIEW: "Under Review",
+  ASSIGNED: "Assigned",
+  IN_PROGRESS: "In Progress",
+  WAITING_FOR_INFO: "Waiting for Information",
+  RESOLVED: "Resolved",
+  CHANGES_REQUESTED: "Changes Requested",
+  CLOSED: "Closed",
+  REJECTED: "Rejected",
+};
+
+/** A requester may reopen a closed ticket for this many days after closure. Managers can always reopen. */
+export const TICKET_REOPEN_WINDOW_DAYS = 14;
+
+/** Categories created automatically the first time categories are needed. */
+export const DEFAULT_TICKET_CATEGORIES: { name: string; description: string; departmentCode?: string }[] = [
+  { name: "Design Request", description: "Banners, creatives, UI mock-ups and other design assets", departmentCode: "DSN" },
+  { name: "Content Request", description: "Copy, blog posts, product descriptions and editing", departmentCode: "CNT" },
+  { name: "Development Support", description: "Help from developers: fixes, integrations, reviews", departmentCode: "DEV" },
+  { name: "SEO Request", description: "Audits, keyword research, metadata and on-page SEO", departmentCode: "SEO" },
+  { name: "Technical Support", description: "Access, tools, hosting and other technical issues" },
+  { name: "General Assistance", description: "Anything that doesn't fit another category" },
+];
+
 export const NOTIFICATION_TYPES = [
   "SYSTEM",
   "ACCOUNT",
@@ -112,8 +169,26 @@ export const NOTIFICATION_TYPES = [
   "TASK",
   "TICKET",
   "REVIEW",
+  "DAILY_UPDATE",
+  "REMINDER",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
+
+/**
+ * Notification preferences a user can switch off (in-app). Assignments of new
+ * work to you are always delivered and can't be muted.
+ */
+export const NOTIFICATION_PREFS = [
+  { key: "project", label: "Project membership", description: "Added to or removed from a project, new projects you manage" },
+  { key: "task_activity", label: "Task activity", description: "Status changes, collaborators and blockers on tasks you own or assigned" },
+  { key: "task_review", label: "Task reviews", description: "Tasks submitted for your review, approvals and change requests" },
+  { key: "ticket_updates", label: "Ticket progress", description: "Updates on tickets you raised or manage (review, started, resolved, closed…)" },
+  { key: "comments", label: "Comments", description: "New comments on your tasks and tickets" },
+  { key: "daily_update", label: "Daily work updates", description: "Reports submitted for your review and review decisions" },
+  { key: "reminders", label: "Deadline reminders", description: "Tasks and projects due soon, and overdue tasks" },
+] as const;
+export type NotificationPref = (typeof NOTIFICATION_PREFS)[number]["key"];
+export const NOTIFICATION_PREF_KEYS = NOTIFICATION_PREFS.map((p) => p.key) as NotificationPref[];
 
 export const PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
 export const DEFAULT_PAGE_SIZE = 10;

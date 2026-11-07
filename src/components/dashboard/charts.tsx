@@ -1,5 +1,6 @@
 "use client";
 
+import { TaskStatusLabel } from "@/components/shared/labels";
 import {
   Bar,
   BarChart,
@@ -54,7 +55,7 @@ export function TaskStatusDonut({ data }: { data: StatusCount[] }) {
           <li key={d.status} className="flex items-center justify-between gap-3">
             <span className="flex items-center gap-2 text-muted-foreground">
               <span className="size-2.5 rounded-sm" style={{ backgroundColor: TASK_STATUS_COLORS[d.status] }} />
-              {humanize(d.status)}
+              <TaskStatusLabel value={d.status} />
             </span>
             <span className="tabular font-medium">{d.count}</span>
           </li>

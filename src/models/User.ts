@@ -25,6 +25,10 @@ const UserSchema = new Schema(
     joiningDate: { type: Date, default: null },
     status: { type: String, enum: USER_STATUSES, default: "ACTIVE" },
     avatarUrl: { type: String, default: "" },
+    /** In-app notification categories this user has switched off (NOTIFICATION_PREFS keys). */
+    notificationPrefs: {
+      muted: { type: [String], default: [] },
+    },
 
     // Security
     lastLoginAt: { type: Date, default: null },

@@ -3,8 +3,9 @@ import type { Types } from "mongoose";
 import type { z } from "zod";
 import { utcDayRange } from "@/lib/dates";
 import type { CurrentUser } from "@/lib/auth/current-user";
-import { ApiError, escapeRegex, forbidden, notFound, paginate, unprocessable } from "@/lib/api";
+import { escapeRegex, forbidden, notFound, paginate, unprocessable } from "@/lib/api";
 import { notify } from "@/lib/notify";
+import { recordAudit } from "@/lib/audit";
 import { hasPermission } from "@/lib/permissions";
 import {
   APPROVAL_MODE_LABELS,
@@ -23,7 +24,7 @@ import type {
   taskListQuerySchema,
   updateTaskSchema,
 } from "@/lib/validations/task";
-import { Department, Milestone, nextSequence, Project, ProjectMember, Task, TaskActivity, TaskComment, User } from "@/models";
+import { Department, Milestone, Project, ProjectMember, Task, TaskActivity, TaskComment, Ticket, User } from "@/models";
 import type { TASK_ACTIVITY_ACTIONS } from "@/models/TaskActivity";
 
 type ActivityAction = (typeof TASK_ACTIVITY_ACTIONS)[number];
@@ -43,6 +44,9 @@ import {
 import { listAttachments } from "./attachment.service";
 import { DEPT_REF_FIELDS, iso, isOverdue, toDepartmentRef, toUserRef, USER_REF_FIELDS } from "./mappers";
 import { refreshProjectProgress } from "./progress.service";
+import { generateTaskNumber } from "./numbering";
+import { disabledTaskStatuses } from "@/lib/settings";
+import { linkedTaskMovesFor, startWorkFromLinkedTask } from "./ticket.service";
 import { oid, type Filter } from "./scope";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -87,6 +91,15 @@ function roles(ctx: AccessContext, task: TaskDoc | any) {
 
 function assertWritable(project: { isArchived?: boolean | null } | null) {
   if (project?.isArchived) throw unprocessable("This project is archived. Its tasks are read-only.");
+}
+
+const isInternalRequest = (task: any) => task?.sourceType === "internal_ticket" || !!task?.linkedTicket;
+
+/** Internal-request tasks mirror their ticket: these changes must be made on the ticket. */
+async function assertNotInternalRequest(task: any, what: string) {
+  if (!isInternalRequest(task)) return;
+  const ticket = await Ticket.findById(task.linkedTicket).select("ticketNumber").lean();
+  throw unprocessable(`This is an internal request. ${what} on ticket ${ticket?.ticketNumber ?? ""}`.trim());
 }
 
 function workflowContext(task: any, r: ReturnType<typeof roles>): WorkflowContext {
@@ -156,14 +169,6 @@ async function validateMilestone(projectId: Types.ObjectId, milestone: string | 
   }
 }
 
-async function generateTaskNumber(): Promise<string> {
-  for (let i = 0; i < 20; i++) {
-    const n = `TSK-${String(await nextSequence("taskNumber")).padStart(5, "0")}`;
-    if (!(await Task.exists({ taskNumber: n }))) return n;
-  }
-  throw new ApiError(500, "Could not generate a task number");
-}
-
 async function activity(task: { _id: Types.ObjectId; project?: Types.ObjectId | null }, actor: string, action: ActivityAction, message: string, from: unknown = null, to: unknown = null) {
   await TaskActivity.create({ task: task._id, project: task.project ?? null, actor: oid(actor), action, message, from, to });
 }
@@ -189,10 +194,17 @@ async function supervisorsFor(task: any): Promise<string[]> {
 /* Mapping                                                             */
 /* ------------------------------------------------------------------ */
 
-function toListItem(t: any, ctx: AccessContext, extras: { subtasks: Map<string, number>; blockedByDeps: Set<string> }): TaskListItemDTO {
+type ListExtras = { subtasks: Map<string, number>; blockedByDeps: Set<string>; ticketMoves: Map<string, TaskStatus[]> };
+
+function toListItem(t: any, ctx: AccessContext, extras: ListExtras): TaskListItemDTO {
   const r = roles(ctx, t);
   let allowed = allowedTransitions(workflowContext(t, r));
   if (extras.blockedByDeps.has(t._id.toString())) allowed = allowed.filter((st) => !DEPENDENCY_GATED_STATUSES.includes(st));
+  // Statuses switched off in Settings are never offered.
+  const off = disabledTaskStatuses();
+  if (off.length) allowed = allowed.filter((st) => !off.includes(st));
+  // Internal requests: only the moves the ticket workflow allows (e.g. "Start work").
+  if (isInternalRequest(t)) allowed = extras.ticketMoves.get(t._id.toString()) ?? [];
   const checklist = t.checklist ?? [];
   return {
     id: t._id.toString(),
@@ -216,6 +228,11 @@ function toListItem(t: any, ctx: AccessContext, extras: { subtasks: Map<string, 
     approvalRequired: t.approvalRequired !== false,
     allowedStatuses: allowed,
     updatedAt: iso(t.updatedAt)!,
+    sourceType: isInternalRequest(t) ? "internal_ticket" : "project",
+    linkedTicket:
+      t.linkedTicket && typeof t.linkedTicket === "object" && "ticketNumber" in t.linkedTicket
+        ? { id: t.linkedTicket._id.toString(), ticketNumber: t.linkedTicket.ticketNumber }
+        : null,
   };
 }
 
@@ -226,9 +243,10 @@ const LIST_POPULATE = (q: any) =>
     .populate("owner", USER_REF_FIELDS)
     .populate("assignedBy", USER_REF_FIELDS)
     .populate("parentTask", "taskNumber title")
+    .populate("linkedTicket", "ticketNumber")
     .lean();
 
-async function listExtras(rows: any[]) {
+async function listExtras(user: CurrentUser, rows: any[]): Promise<ListExtras> {
   const ids = rows.map((r) => r._id);
   const [sub, depRows] = await Promise.all([
     Task.aggregate<{ _id: Types.ObjectId; n: number }>([{ $match: { parentTask: { $in: ids } } }, { $group: { _id: "$parentTask", n: { $sum: 1 } } }]),
@@ -236,7 +254,8 @@ async function listExtras(rows: any[]) {
   ]);
   const openDeps = new Set(depRows.map((d) => d._id.toString()));
   const blockedByDeps = new Set(rows.filter((r) => (r.dependencies ?? []).some((d: any) => openDeps.has(d.toString()))).map((r) => r._id.toString()));
-  return { subtasks: new Map(sub.map((x) => [x._id.toString(), x.n])), blockedByDeps };
+  const ticketMoves = await linkedTaskMovesFor(user, rows.filter(isInternalRequest));
+  return { subtasks: new Map(sub.map((x) => [x._id.toString(), x.n])), blockedByDeps, ticketMoves };
 }
 
 /* ------------------------------------------------------------------ */
@@ -260,6 +279,8 @@ export async function listTasks(user: CurrentUser, query: ListQuery): Promise<Pa
   if (query.status.length) and.push({ status: { $in: query.status } });
   if (query.priority) and.push({ priority: query.priority });
   if (query.topLevel) and.push({ parentTask: null });
+  if (query.source === "internal_ticket") and.push({ sourceType: "internal_ticket" });
+  if (query.source === "project") and.push({ sourceType: { $ne: "internal_ticket" } });
   const now = new Date();
   if (query.due === "overdue") and.push({ dueDate: { $lt: now }, status: { $nin: CLOSED_TASK_STATUSES } });
   if (query.due === "today") and.push({ dueDate: utcDayRange(now) });
@@ -293,7 +314,7 @@ export async function listTasks(user: CurrentUser, query: ListQuery): Promise<Pa
     rows = await LIST_POPULATE(Task.find(filter).sort({ [field]: dir, _id: 1 }).skip(skip).limit(query.pageSize));
   }
   const total = await Task.countDocuments(filter);
-  const extras = await listExtras(rows);
+  const extras = await listExtras(user, rows);
   return paginate(rows.map((r) => toListItem(r, ctx, extras)), total, query.page, query.pageSize);
 }
 
@@ -312,6 +333,7 @@ export async function getTask(user: CurrentUser, id: string): Promise<TaskDetail
     .populate("dependencies", "taskNumber title status")
     .populate("blocker.reportedBy", USER_REF_FIELDS)
     .populate("checklist.doneBy", USER_REF_FIELDS)
+    .populate("linkedTicket", "ticketNumber")
     .lean();
 
   const r = roles(ctx, task);
@@ -324,11 +346,16 @@ export async function getTask(user: CurrentUser, id: string): Promise<TaskDetail
     listAttachments(user, "Task", task._id, r.manage),
   ]);
   const unresolved = (t.dependencies ?? []).filter((d: any) => !CLOSED_TASK_STATUSES.includes(d.status)).length;
-  const extras = { subtasks: new Map([[t._id.toString(), subtasks.length]]), blockedByDeps: new Set(unresolved ? [t._id.toString()] : []) };
+  const extras: ListExtras = {
+    subtasks: new Map([[t._id.toString(), subtasks.length]]),
+    blockedByDeps: new Set(unresolved ? [t._id.toString()] : []),
+    ticketMoves: await linkedTaskMovesFor(user, isInternalRequest(t) ? [t] : []),
+  };
   const base = toListItem(t, ctx, extras);
   if (!writable) base.allowedStatuses = [];
   const workers = r.manage || r.owner || r.collaborator;
   const creationDepts = project && writable && hasPermission(user.role, "task:manage") ? taskCreationDepartments(ctx, project) : [];
+  const internal = isInternalRequest(t);
 
   return {
     ...base,
@@ -387,15 +414,16 @@ export async function getTask(user: CurrentUser, id: string): Promise<TaskDetail
       createdAt: iso(a.createdAt)!,
     })),
     can: {
-      edit: r.manage && writable,
-      reassign: r.manage && writable,
-      review: writable && reviewAvailable(workflowContext(task, r)),
+      // Internal requests are edited, reassigned and reviewed on their ticket.
+      edit: r.manage && writable && !internal,
+      reassign: r.manage && writable && !internal,
+      review: writable && !internal && reviewAvailable(workflowContext(task, r)),
       comment: writable && (workers || canViewTask(ctx, task)),
       updateChecklist: writable && workers,
       upload: writable && workers,
       reportBlocker: writable && workers && !CLOSED_TASK_STATUSES.includes(task.status as TaskStatus),
       logHours: writable && (r.manage || r.owner),
-      addSubtask: writable && r.manage && !task.parentTask && creationDepts.length > 0 && !CLOSED_TASK_STATUSES.includes(task.status as TaskStatus),
+      addSubtask: writable && !internal && r.manage && !task.parentTask && creationDepts.length > 0 && !CLOSED_TASK_STATUSES.includes(task.status as TaskStatus),
     },
   };
 }
@@ -406,6 +434,7 @@ export async function getTask(user: CurrentUser, id: string): Promise<TaskDetail
 
 export async function createTask(user: CurrentUser, input: CreateInput): Promise<{ id: string; taskNumber: string }> {
   if (!hasPermission(user.role, "task:manage")) throw forbidden();
+  if (disabledTaskStatuses().includes(input.status)) throw unprocessable(`The ${humanize(input.status)} status is switched off. Create the task as To Do.`, { status: "Status not available" });
   const ctx = await accessContext(user);
 
   // 1. Project: visible, writable, not closed.
@@ -481,11 +510,18 @@ export async function createTask(user: CurrentUser, input: CreateInput): Promise
     recipients: collaborators,
     actorId: user.id,
     type: "TASK",
-    title: "Added as a collaborator",
+    title: "Added as a collaborator", pref: "task_activity",
     message: `${task.taskNumber} · ${task.title} (${project.name})`,
     link: `/tasks/${task._id}`,
     entityType: "Task",
     entityId: task._id,
+  });
+  await recordAudit({
+    actorId: user.id,
+    action: "task.create",
+    entityType: "Task",
+    entityId: task._id,
+    summary: `Created ${task.taskNumber} "${task.title}" assigned to ${owner.name}`,
   });
   await refreshProjectProgress(project._id);
   return { id: task._id.toString(), taskNumber: task.taskNumber };
@@ -497,7 +533,11 @@ export async function updateTask(user: CurrentUser, id: string, input: UpdateInp
   const r = roles(ctx, task);
 
   const touched = (Object.keys(input) as (keyof UpdateInput)[]).filter((k) => input[k] !== undefined);
-  if (!r.manage) {
+  if (isInternalRequest(task)) {
+    // Title, priority, deadline and owner come from the ticket; only hours can be logged here.
+    if (touched.some((k) => k !== "actualHours")) await assertNotInternalRequest(task, "Edit it");
+    if (!r.owner && !r.manage) throw forbidden("You can only log hours on this task");
+  } else if (!r.manage) {
     const disallowed = touched.filter((k) => k !== "actualHours");
     if (disallowed.length || !r.owner) throw forbidden("You can only log hours on this task");
   }
@@ -575,7 +615,7 @@ export async function updateTask(user: CurrentUser, id: string, input: UpdateInp
       recipients: addedCollaborators,
       actorId: user.id,
       type: "TASK",
-      title: "Added as a collaborator",
+      title: "Added as a collaborator", pref: "task_activity",
       message: `${task.taskNumber} · ${update.title ?? task.title}`,
       link: `/tasks/${task._id}`,
       entityType: "Task",
@@ -587,6 +627,7 @@ export async function updateTask(user: CurrentUser, id: string, input: UpdateInp
 export async function assignTask(user: CurrentUser, id: string, input: z.output<typeof assignTaskSchema>): Promise<void> {
   const { ctx, task, project } = await loadTaskForUser(user, id);
   assertWritable(project);
+  await assertNotInternalRequest(task, "Reassign it");
   if (!canManageTask(ctx, task) || !project) throw forbidden("You can't reassign this task");
   if (CLOSED_TASK_STATUSES.includes(task.status as TaskStatus)) throw unprocessable("Reopen the task before reassigning it");
   if (!project.departments.some((d) => d.toString() === input.department)) {
@@ -606,6 +647,14 @@ export async function assignTask(user: CurrentUser, id: string, input: z.output<
     }
   );
   await activity(task, user.id, "ASSIGNED", `Reassigned from ${previousOwner?.name ?? "nobody"} to ${newOwner.name}`, previousOwner?.name ?? null, newOwner.name);
+  await recordAudit({
+    actorId: user.id,
+    action: "task.assign",
+    entityType: "Task",
+    entityId: task._id,
+    summary: `Reassigned ${task.taskNumber} from ${previousOwner?.name ?? "nobody"} to ${newOwner.name}`,
+    changes: { owner: { from: previousOwner?.name ?? null, to: newOwner.name }, department: { from: s(task.department), to: input.department } },
+  });
   await notify({
     recipients: [newOwner._id],
     actorId: user.id,
@@ -621,7 +670,7 @@ export async function assignTask(user: CurrentUser, id: string, input: z.output<
       recipients: [previousOwner._id],
       actorId: user.id,
       type: "TASK",
-      title: "Task reassigned",
+      title: "Task reassigned", pref: "task_activity",
       message: `${task.taskNumber} · ${task.title} is now assigned to ${newOwner.name}.`,
       link: `/tasks/${task._id}`,
       entityType: "Task",
@@ -640,8 +689,14 @@ export async function changeTaskStatus(user: CurrentUser, id: string, status: Ta
   const r = roles(ctx, task);
   const from = task.status as TaskStatus;
   if (from === status) return;
+  if (isInternalRequest(task)) {
+    // The ticket owns the status: route the move through the ticket workflow.
+    if (status === "IN_PROGRESS" && ["TODO", "CHANGES_REQUESTED"].includes(from)) return startWorkFromLinkedTask(user, task);
+    await assertNotInternalRequest(task, from === "IN_PROGRESS" && status === "IN_REVIEW" ? "Upload the deliverable and submit it as resolved" : "Update its status");
+  }
 
-  const allowed = allowedTransitions(workflowContext(task, r));
+  const off = disabledTaskStatuses();
+  const allowed = allowedTransitions(workflowContext(task, r)).filter((st) => !off.includes(st));
   if (!allowed.includes(status)) {
     if (status === "COMPLETED" && task.approvalRequired !== false) {
       throw unprocessable("This task requires approval. Submit it for review instead of completing it.");
@@ -675,7 +730,7 @@ export async function changeTaskStatus(user: CurrentUser, id: string, status: Ta
       recipients: await reviewersFor(task),
       actorId: user.id,
       type: "REVIEW",
-      title: "Task submitted for review",
+      title: "Task submitted for review", pref: "task_review",
       message: `${task.taskNumber} · ${task.title}`,
       link: `/tasks/${task._id}`,
       entityType: "Task",
@@ -686,6 +741,7 @@ export async function changeTaskStatus(user: CurrentUser, id: string, status: Ta
       recipients: [task.owner],
       actorId: user.id,
       type: "TASK",
+      pref: "task_activity",
       title: `Task moved to ${humanize(status)}`,
       message: `${task.taskNumber} · ${task.title}`,
       link: `/tasks/${task._id}`,
@@ -693,12 +749,34 @@ export async function changeTaskStatus(user: CurrentUser, id: string, status: Ta
       entityId: task._id,
     });
   }
+  if (status !== "IN_REVIEW" && s(task.owner) === user.id && task.assignedBy && s(task.assignedBy) !== user.id) {
+    await notify({
+      recipients: [task.assignedBy],
+      actorId: user.id,
+      type: "TASK",
+      pref: "task_activity",
+      title: "Task status changed",
+      message: `${task.taskNumber} · ${task.title}: ${humanize(from)} → ${humanize(status)}`,
+      link: `/tasks/${task._id}`,
+      entityType: "Task",
+      entityId: task._id,
+    });
+  }
+  await recordAudit({
+    actorId: user.id,
+    action: "task.status",
+    entityType: "Task",
+    entityId: task._id,
+    summary: `${task.taskNumber}: ${humanize(from)} → ${humanize(status)}`,
+    changes: { status: { from, to: status } },
+  });
   await refreshProjectProgress(task.project);
 }
 
 export async function reviewTask(user: CurrentUser, id: string, decision: "APPROVE" | "REQUEST_CHANGES", comment: string): Promise<void> {
   const { ctx, task, project } = await loadTaskForUser(user, id);
   assertWritable(project);
+  await assertNotInternalRequest(task, "The requester confirms completion or requests changes");
   const r = roles(ctx, task);
   if (task.status !== "IN_REVIEW") throw unprocessable("Only tasks in review can be approved or sent back");
   if (!reviewAvailable(workflowContext(task, r))) {
@@ -723,6 +801,7 @@ export async function reviewTask(user: CurrentUser, id: string, decision: "APPRO
     );
     if (comment) await TaskComment.create({ task: task._id, author: oid(user.id), body: comment, kind: "REVIEW" });
     await activity(task, user.id, "APPROVED", `Approved and completed${comment ? `: ${comment}` : ""}`, "IN_REVIEW", "COMPLETED");
+    await recordAudit({ actorId: user.id, action: "task.approve", entityType: "Task", entityId: task._id, summary: `Approved ${task.taskNumber}`, changes: { status: { from: "IN_REVIEW", to: "COMPLETED" } } });
     await notify({
       recipients: [task.owner, ...(task.collaborators ?? [])],
       actorId: user.id,
@@ -737,6 +816,7 @@ export async function reviewTask(user: CurrentUser, id: string, decision: "APPRO
     await Task.updateOne({ _id: task._id }, { $set: { status: "CHANGES_REQUESTED" } });
     await TaskComment.create({ task: task._id, author: oid(user.id), body: comment, kind: "REVIEW" });
     await activity(task, user.id, "CHANGES_REQUESTED", `Requested changes: ${comment}`, "IN_REVIEW", "CHANGES_REQUESTED");
+    await recordAudit({ actorId: user.id, action: "task.changes_requested", entityType: "Task", entityId: task._id, summary: `Requested changes on ${task.taskNumber}`, changes: { status: { from: "IN_REVIEW", to: "CHANGES_REQUESTED" } } });
     await notify({
       recipients: [task.owner],
       actorId: user.id,
@@ -769,7 +849,7 @@ export async function setBlocker(user: CurrentUser, id: string, action: "REPORT"
       recipients: await supervisorsFor(task),
       actorId: user.id,
       type: "TASK",
-      title: "Blocker reported",
+      title: "Blocker reported", pref: "task_activity",
       message: `${task.taskNumber} · ${task.title}: ${reason.slice(0, 140)}`,
       link: `/tasks/${task._id}`,
       entityType: "Task",
@@ -796,6 +876,7 @@ export async function addComment(user: CurrentUser, id: string, body: string): P
     actorId: user.id,
     type: "TASK",
     title: `New comment on ${task.taskNumber}`,
+    pref: "comments",
     message: body.slice(0, 160),
     link: `/tasks/${task._id}`,
     entityType: "Task",

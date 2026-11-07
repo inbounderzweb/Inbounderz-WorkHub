@@ -4,7 +4,8 @@ import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { connectDB } from "@/lib/db";
 import { getRoleById } from "@/lib/roles";
-import { hasPermission, ROLE_PERMISSIONS, type Permission } from "@/lib/permissions";
+import { effectivePermissions, hasPermission, type Permission } from "@/lib/permissions";
+import { getSystemSettings } from "@/lib/settings";
 import type { RoleKey } from "@/lib/constants";
 import { User } from "@/models";
 
@@ -42,6 +43,8 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
 
   const role = await getRoleById(user.role);
   if (!role) return null;
+  // Installs the configured permission overrides before any permission check runs.
+  await getSystemSettings();
 
   return {
     id: user._id.toString(),
@@ -53,7 +56,7 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     role: role.key,
     roleName: role.name,
     roleLevel: role.level,
-    permissions: ROLE_PERMISSIONS[role.key],
+    permissions: effectivePermissions(role.key),
     departmentId: user.department ? user.department.toString() : null,
   };
 });

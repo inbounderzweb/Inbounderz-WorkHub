@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { PriorityBadge, TaskStatusBadge } from "./badges";
 import { UserAvatar } from "./user-avatar";
 import { EmptyState } from "./states";
+import { InternalRequestBadge } from "@/components/tickets/ticket-badges";
 
 export function TaskList({
   tasks,
@@ -26,12 +27,12 @@ export function TaskList({
     <ul className="divide-y">
       {tasks.map((t) => (
         <li key={t.id}>
-          <Link href={`/tasks/${t.id}`} className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/40">
+          <Link href={t.ticket ? `/tickets/${t.ticket.id}?from=task` : `/tasks/${t.id}`} className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/40">
           {showOwner && t.owner ? <UserAvatar name={t.owner.name} size="sm" /> : null}
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium">{t.title}</p>
             <p className="flex flex-wrap items-center gap-x-2 truncate text-xs text-muted-foreground">
-              {t.project ? <span className="font-mono">{t.project.code}</span> : null}
+              {t.ticket ? <InternalRequestBadge ticketNumber={t.ticket.ticketNumber} /> : t.project ? <span className="font-mono">{t.project.code}</span> : null}
               {showOwner && t.owner ? <span>{t.owner.name}</span> : null}
               <PriorityBadge priority={t.priority} />
             </p>

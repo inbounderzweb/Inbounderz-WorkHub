@@ -12,3 +12,8 @@ export { Attachment } from "./Attachment";
 export { Notification } from "./Notification";
 export { AuditLog } from "./AuditLog";
 export { Counter, nextSequence } from "./Counter";
+export { Ticket } from "./Ticket";
+export { TicketCategory } from "./TicketCategory";
+export { TicketComment } from "./TicketComment";
+export { TicketActivity } from "./TicketActivity";
+export { SystemSetting } from "./SystemSetting";

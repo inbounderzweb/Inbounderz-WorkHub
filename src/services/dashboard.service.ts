@@ -11,7 +11,8 @@ import {
   type TaskStatus,
 } from "@/lib/constants";
 import { AuditLog, Department, Notification, Project, Task, User } from "@/models";
-import type { ActivityDTO, NotificationDTO, TaskSummaryDTO } from "@/types/dto";
+import type { ActivityDTO, NotificationDTO, TaskSummaryDTO, TicketListItemDTO } from "@/types/dto";
+import { departmentTicketQueue, myOpenTickets, ticketIntakeQueue } from "./ticket.service";
 import { dedupe, headedDepartmentIds, ledDepartmentIds, oid, type Filter } from "./scope";
 import { accessContext } from "./access";
 import { EMPTY_PROGRESS, progressFor } from "./progress.service";
@@ -64,7 +65,10 @@ export type AdminDashboard = {
   departmentPerformance: DepartmentPerformance[];
   recentActivity: ActivityDTO[];
   upcomingDeadlines: TaskSummaryDTO[];
+  ticketQueue: TicketQueue;
 };
+
+export type TicketQueue = { items: TicketListItemDTO[]; total: number };
 
 export type ManagerDashboard = {
   kind: "manager";
@@ -79,6 +83,7 @@ export type ManagerDashboard = {
   reviewQueue: TaskSummaryDTO[];
   deadlines: TaskSummaryDTO[];
   tasksByStatus: StatusCount[];
+  ticketQueue: TicketQueue;
 };
 
 export type TeamDashboard = {
@@ -96,6 +101,8 @@ export type TeamDashboard = {
   reviewQueue: TaskSummaryDTO[];
   overdue: TaskSummaryDTO[];
   tasksByStatus: StatusCount[];
+  /** Open requests sent to departments the user heads (Department Heads only). */
+  departmentTickets: TicketQueue;
 };
 
 export type EmployeeDashboard = {
@@ -104,11 +111,13 @@ export type EmployeeDashboard = {
   todaysDeadlines: TaskSummaryDTO[];
   myTasks: TaskSummaryDTO[];
   notifications: NotificationDTO[];
+  myTickets: TicketListItemDTO[];
 };
 
 export type DashboardData = AdminDashboard | ManagerDashboard | TeamDashboard | EmployeeDashboard;
 
-const populateTask = (q: any) => q.populate("owner", USER_REF_FIELDS).populate("project", "name code").lean();
+const populateTask = (q: any) =>
+  q.populate("owner", USER_REF_FIELDS).populate("project", "name code").populate("linkedTicket", "ticketNumber").lean();
 
 async function tasksByStatus(match: Filter): Promise<StatusCount[]> {
   const rows = await Task.aggregate<{ _id: TaskStatus; n: number }>([
@@ -123,7 +132,7 @@ const overdueFilter = () => ({ status: { $nin: CLOSED_TASK_STATUSES }, dueDate: 
 
 /* ------------------------------------------------------------------ */
 
-async function adminDashboard(): Promise<AdminDashboard> {
+async function adminDashboard(user: CurrentUser): Promise<AdminDashboard> {
   const now = new Date();
   const [
     employees,
@@ -213,6 +222,7 @@ async function adminDashboard(): Promise<AdminDashboard> {
     }),
     recentActivity: activity.map(toActivity),
     upcomingDeadlines: (upcoming as any[]).map(toTaskSummary),
+    ticketQueue: await ticketIntakeQueue(user),
   };
 }
 
@@ -223,6 +233,7 @@ export function toActivity(a: any): ActivityDTO {
     entityType: a.entityType,
     entityId: a.entityId ? a.entityId.toString() : null,
     summary: a.summary ?? "",
+    changes: a.changes ?? null,
     actor: toUserRef(a.actor),
     createdAt: iso(a.createdAt)!,
   };
@@ -283,6 +294,7 @@ async function managerDashboard(user: CurrentUser): Promise<ManagerDashboard> {
     reviewQueue: (review as any[]).map(toTaskSummary),
     deadlines: (deadlines as any[]).map(toTaskSummary),
     tasksByStatus: statusCounts,
+    ticketQueue: await ticketIntakeQueue(user),
   };
 }
 
@@ -366,6 +378,7 @@ async function teamDashboard(user: CurrentUser): Promise<TeamDashboard> {
     reviewQueue: (review as any[]).map(toTaskSummary),
     overdue: (overdue as any[]).map(toTaskSummary),
     tasksByStatus: statusCounts,
+    departmentTickets: isHead ? await departmentTicketQueue(user) : { items: [], total: 0 },
   };
 }
 
@@ -411,13 +424,14 @@ async function employeeDashboard(user: CurrentUser): Promise<EmployeeDashboard> 
     todaysDeadlines: (todays as any[]).map(toTaskSummary),
     myTasks: (myTasks as any[]).map(toTaskSummary),
     notifications: notifications.map(toNotificationDTO),
+    myTickets: await myOpenTickets(user),
   };
 }
 
 export async function getDashboard(user: CurrentUser): Promise<DashboardData> {
   switch (user.role) {
     case "SUPER_ADMIN":
-      return adminDashboard();
+      return adminDashboard(user);
     case "PROJECT_MANAGER":
       return managerDashboard(user);
     case "DEPARTMENT_HEAD":

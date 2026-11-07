@@ -18,7 +18,9 @@ import {
 import { StatCard } from "@/components/shared/stat-card";
 import { TaskList } from "@/components/shared/task-list";
 import { EmptyState } from "@/components/shared/states";
-import { ProjectStatusBadge } from "@/components/shared/badges";
+import { PriorityBadge, ProjectStatusBadge } from "@/components/shared/badges";
+import { TicketStatusBadge } from "@/components/tickets/ticket-badges";
+import type { TicketListItemDTO } from "@/types/dto";
 import { Progress } from "@/components/ui/progress";
 import type {
   AdminDashboard as AdminData,
@@ -33,11 +35,60 @@ import { DepartmentPerformanceChart, TaskStatusDonut, WorkloadChart } from "./ch
 
 const grid4 = "grid gap-4 sm:grid-cols-2 xl:grid-cols-4";
 
-/** Placeholder card for the ticketing module (Day 2). Shows no fake numbers. */
-function TicketsPending({ title }: { title: string }) {
+/** Compact list of internal tickets for dashboard panels. */
+function TicketPanel({
+  title,
+  description,
+  href,
+  items,
+  total,
+  emptyTitle,
+  emptyDescription,
+  showRequester = true,
+  className,
+}: {
+  title: string;
+  description?: string;
+  href: string;
+  items: TicketListItemDTO[];
+  total?: number;
+  emptyTitle: string;
+  emptyDescription?: string;
+  showRequester?: boolean;
+  className?: string;
+}) {
   return (
-    <Panel title={title} description="Internal ticketing">
-      <EmptyState icon={Ticket} title="Ticketing is not enabled yet" description="This panel will show live ticket data once the Tickets module is switched on." className="py-8" />
+    <Panel title={title} description={description ?? (total ? `${total} in total` : undefined)} href={href} className={className}>
+      {items.length ? (
+        <ul className="divide-y">
+          {items.map((t) => (
+            <li key={t.id}>
+              <Link href={`/tickets/${t.id}`} className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/40">
+                <div className="min-w-0 flex-1">
+                  <p className="flex items-center gap-2 truncate text-sm font-medium">
+                    {t.awaitingMe ? <span className="size-2 shrink-0 rounded-full bg-primary" title="Waiting for you" /> : null}
+                    <span className="truncate">{t.title}</span>
+                  </p>
+                  <p className="flex flex-wrap items-center gap-x-2 truncate text-xs text-muted-foreground">
+                    <span className="font-mono">{t.ticketNumber}</span>
+                    {showRequester ? <span>{t.requester?.name} → {t.targetDepartment?.name}</span> : <span>{t.targetDepartment?.name}{t.assignee ? ` · ${t.assignee.name}` : ""}</span>}
+                    <PriorityBadge priority={t.priority} />
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  <TicketStatusBadge status={t.status} />
+                  <span className={cn("tabular text-xs", t.isOverdue ? "font-medium text-red-600" : "text-muted-foreground")}>
+                    {t.isOverdue ? "Overdue · " : "Due "}
+                    {format(day(t.dueDate), "d MMM")}
+                  </span>
+                </div>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <EmptyState icon={Ticket} title={emptyTitle} description={emptyDescription} className="py-8" />
+      )}
     </Panel>
   );
 }
@@ -114,9 +165,19 @@ export function AdminDashboardView({ data }: { data: AdminData }) {
         </Panel>
       </div>
 
-      <Panel title="Upcoming deadlines" description="Open tasks due in the next 7 days">
-        <TaskList tasks={data.upcomingDeadlines} emptyTitle="No deadlines this week" />
-      </Panel>
+      <div className="grid gap-6 xl:grid-cols-2">
+        <Panel title="Upcoming deadlines" description="Open tasks due in the next 7 days">
+          <TaskList tasks={data.upcomingDeadlines} emptyTitle="No deadlines this week" />
+        </Panel>
+        <TicketPanel
+          title="Tickets awaiting assignment"
+          href="/tickets"
+          items={data.ticketQueue.items}
+          total={data.ticketQueue.total}
+          emptyTitle="No new tickets"
+          emptyDescription="New and under-review internal requests appear here."
+        />
+      </div>
     </div>
   );
 }
@@ -174,7 +235,14 @@ export function ManagerDashboardView({ data }: { data: ManagerData }) {
         <Panel title="Upcoming deadlines" description="Overdue and due within 7 days">
           <TaskList tasks={data.deadlines} emptyTitle="No upcoming deadlines" />
         </Panel>
-        <TicketsPending title="New internal tickets" />
+        <TicketPanel
+          title="New internal tickets"
+          description={data.ticketQueue.total ? `${data.ticketQueue.total} waiting for review or assignment` : "Waiting for review or assignment"}
+          href="/tickets"
+          items={data.ticketQueue.items}
+          emptyTitle="No new tickets"
+          emptyDescription="You're all caught up."
+        />
       </div>
     </div>
   );
@@ -214,13 +282,23 @@ export function TeamDashboardView({ data }: { data: TeamData }) {
         </Panel>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className={cn("grid gap-6", isDept ? "xl:grid-cols-3" : "lg:grid-cols-2")}>
         <Panel title="Pending reviews" description="Tasks submitted for review">
           <TaskList tasks={data.reviewQueue} emptyTitle="Nothing waiting for review" />
         </Panel>
         <Panel title="Overdue work">
           <TaskList tasks={data.overdue} emptyTitle="No overdue work" emptyDescription="Your team is on schedule." />
         </Panel>
+        {isDept ? (
+          <TicketPanel
+            title="Requests to your departments"
+            description={data.departmentTickets.total ? `${data.departmentTickets.total} open` : "Open internal tickets"}
+            href="/tickets"
+            items={data.departmentTickets.items}
+            emptyTitle="No open requests"
+            emptyDescription="Internal tickets sent to departments you head appear here."
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -268,7 +346,15 @@ export function EmployeeDashboardView({ data }: { data: EmployeeData }) {
             <EmptyState icon={Bell} title="No notifications" className="py-10" />
           )}
         </Panel>
-        <TicketsPending title="My tickets" />
+        <TicketPanel
+          title="My tickets"
+          description="Open requests you've raised"
+          href="/my-tickets"
+          items={data.myTickets}
+          showRequester={false}
+          emptyTitle="No open tickets"
+          emptyDescription="Need help from another department? Raise a ticket from My Tickets."
+        />
       </div>
     </div>
   );

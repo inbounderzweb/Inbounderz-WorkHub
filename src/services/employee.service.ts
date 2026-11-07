@@ -214,6 +214,7 @@ export async function getEmployee(actor: CurrentUser, id: string): Promise<Emplo
       .limit(8)
       .populate("owner", USER_REF_FIELDS)
       .populate("project", "name code")
+      .populate("linkedTicket", "ticketNumber")
       .lean(),
   ]);
 
@@ -411,7 +412,8 @@ export async function updateEmployee(actor: CurrentUser, id: string, input: Upda
   if (newRoleKey) changes.role = { from: currentRole?.key ?? null, to: newRoleKey };
   await recordAudit({
     actorId: actor.id,
-    action: "employee.update",
+    // Role changes get their own action so they're easy to find in the audit log.
+    action: newRoleKey && newRoleKey !== currentRole?.key ? "employee.role_change" : "employee.update",
     entityType: "User",
     entityId: target._id,
     summary: `Updated ${target.name}: ${Object.keys(changes).join(", ") || "no changes"}`,

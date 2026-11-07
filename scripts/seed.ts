@@ -16,6 +16,7 @@ import { connectDB } from "@/lib/db";
 import { getRoleByKey, syncRoles } from "@/lib/roles";
 import { passwordSchema } from "@/lib/validations/common";
 import { nextSequence, Project, Task, User } from "@/models";
+import { ensureDefaultTicketCategories } from "@/services/ticket-category-defaults";
 
 /** Idempotent data migrations for databases created by earlier versions. */
 async function migrate() {
@@ -37,6 +38,8 @@ async function migrate() {
     numbered++;
   }
   await Project.collection.updateMany({ approvalMode: { $exists: false } }, { $set: { approvalMode: "DEPARTMENT", isArchived: false } });
+  // v2.0: tasks record their source (project task vs internal ticket work item)
+  await tasks.updateMany({ sourceType: { $exists: false } }, { $set: { sourceType: "project", linkedTicket: null } });
   if (blocked.modifiedCount || numbered) console.log(`✓ Migrated ${blocked.modifiedCount} blocked task(s), numbered ${numbered} task(s)`);
 }
 
@@ -60,6 +63,8 @@ async function main() {
   await migrate();
   await Promise.all(Object.values(mongoose.models).map((m) => m.syncIndexes()));
   console.log("✓ Roles and indexes synced");
+  await ensureDefaultTicketCategories();
+  console.log("✓ Ticket categories ready");
 
   const role = await getRoleByKey("SUPER_ADMIN");
   const existing = await User.findOne({ email });

@@ -201,6 +201,7 @@ export async function getDepartment(actor: CurrentUser, id: string): Promise<Dep
       .limit(10)
       .populate("owner", USER_REF_FIELDS)
       .populate("project", "name code")
+      .populate("linkedTicket", "ticketNumber")
       .lean(),
     Project.find({ departments: _id }).sort({ status: 1, updatedAt: -1 }).limit(10).select("name code status progress").lean(),
   ]);

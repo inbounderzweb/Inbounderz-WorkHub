@@ -1,5 +1,6 @@
 "use client";
 
+import { useLabels } from "@/components/shared/labels";
 import { useState } from "react";
 import { toast } from "sonner";
 import { ChevronDown } from "lucide-react";
@@ -18,7 +19,7 @@ import { api, ApiClientError } from "@/lib/http";
 import { humanize, type TaskStatus } from "@/lib/constants";
 
 /** Friendly verb for a status transition. */
-export function transitionLabel(from: TaskStatus, to: TaskStatus): string {
+export function transitionLabel(from: TaskStatus, to: TaskStatus, label: (s: TaskStatus) => string = humanize): string {
   if (to === "IN_REVIEW") return "Submit for review";
   if (to === "IN_PROGRESS" && from === "IN_REVIEW") return "Withdraw from review";
   if (to === "IN_PROGRESS" && (from === "COMPLETED" || from === "CANCELLED")) return "Reopen";
@@ -28,7 +29,7 @@ export function transitionLabel(from: TaskStatus, to: TaskStatus): string {
   if (to === "CANCELLED") return "Cancel task";
   if (to === "COMPLETED") return "Mark completed";
   if (to === "TODO" && from === "CANCELLED") return "Restore to To Do";
-  return `Move to ${humanize(to)}`;
+  return `Move to ${label(to)}`;
 }
 
 export async function changeStatus(taskId: string, status: TaskStatus, note = ""): Promise<boolean> {
@@ -55,6 +56,7 @@ export function TaskStatusMenu({
   onChanged?: () => void;
 }) {
   const [pending, setPending] = useState(false);
+  const labels = useLabels();
   if (!allowed.length) return <TaskStatusBadge status={status} />;
   return (
     <DropdownMenu>
@@ -77,7 +79,7 @@ export function TaskStatusMenu({
               if (ok) onChanged?.();
             }}
           >
-            {transitionLabel(status, s)}
+            {transitionLabel(status, s, labels.status)}
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>

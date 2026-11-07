@@ -103,4 +103,6 @@ export const taskListQuerySchema = z.object({
     .optional()
     .transform((v) => v === "1" || v === "true"),
   sort: z.enum(["dueDate", "-dueDate", "-updatedAt", "-createdAt", "priority", "title"]).optional().default("dueDate"),
+  /** "internal_ticket" = internal requests only, "project" = project tasks only. */
+  source: z.enum(["", "project", "internal_ticket"]).optional().default(""),
 });

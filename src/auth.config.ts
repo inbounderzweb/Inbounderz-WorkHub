@@ -3,7 +3,8 @@ import type { RoleKey } from "@/lib/constants";
 
 /** Routes reachable without a session. */
 const PUBLIC_PATHS = ["/login", "/forgot-password", "/reset-password"];
-const PUBLIC_API_PREFIXES = ["/api/auth", "/api/account"];
+// /api/cron authenticates with CRON_SECRET (Bearer) inside the route, not a user session.
+const PUBLIC_API_PREFIXES = ["/api/auth", "/api/account", "/api/cron/"];
 
 /**
  * Edge/proxy-safe part of the Auth.js config (no database access).

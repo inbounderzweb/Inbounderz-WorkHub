@@ -1,5 +1,5 @@
 import { Schema, type InferSchemaType, type Types } from "mongoose";
-import { APPROVAL_MODES, TASK_PRIORITIES, TASK_STATUSES } from "@/lib/constants";
+import { APPROVAL_MODES, TASK_PRIORITIES, TASK_SOURCE_TYPES, TASK_STATUSES } from "@/lib/constants";
 import { defineModel } from "./_helpers";
 
 const ChecklistItemSchema = new Schema(
@@ -60,6 +60,14 @@ const TaskSchema = new Schema(
     tags: [{ type: String, trim: true, maxlength: 40 }],
     order: { type: Number, default: 0 },
     createdBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
+
+    /**
+     * "project" = normal project task. "internal_ticket" = the work item for an
+     * internal department ticket: its status, owner, deadline and priority are
+     * always derived from the ticket (see lib/ticket-workflow.ts).
+     */
+    sourceType: { type: String, enum: TASK_SOURCE_TYPES, default: "project" },
+    linkedTicket: { type: Schema.Types.ObjectId, ref: "Ticket", default: null },
   },
   { timestamps: true }
 );
@@ -73,6 +81,8 @@ TaskSchema.index({ status: 1, dueDate: 1 });
 TaskSchema.index({ taskNumber: 1 }, { unique: true });
 TaskSchema.index({ dependencies: 1 });
 TaskSchema.index({ milestone: 1 });
+// At most one work item per ticket: reassignment reuses it, so duplicates are impossible.
+TaskSchema.index({ linkedTicket: 1 }, { unique: true, partialFilterExpression: { linkedTicket: { $type: "objectId" } } });
 
 export type TaskDoc = InferSchemaType<typeof TaskSchema> & { _id: Types.ObjectId };
 export const Task = defineModel("Task", TaskSchema);

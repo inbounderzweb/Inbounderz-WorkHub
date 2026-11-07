@@ -6,7 +6,6 @@ import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCurrentUser } from "@/components/providers/user-provider";
-import { hasPermission } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 import { Logo } from "./logo";
 import { NAV } from "./nav";
@@ -18,7 +17,7 @@ export function SidebarNav({ collapsed = false, onNavigate }: { collapsed?: bool
   return (
     <nav className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 py-4 scrollbar-thin" aria-label="Main">
       {NAV.map((section) => {
-        const items = section.items.filter((i) => !i.permission || hasPermission(user.role, i.permission));
+        const items = section.items.filter((i) => !i.permission || user.permissions.includes(i.permission));
         if (!items.length) return null;
         return (
           <div key={section.label} className="space-y-1">

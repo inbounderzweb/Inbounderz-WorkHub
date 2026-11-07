@@ -1,5 +1,6 @@
 "use client";
 
+import { PriorityLabel, TaskStatusLabel, useLabels } from "@/components/shared/labels";
 import { day } from "@/lib/dates";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -52,6 +53,10 @@ import { cn } from "@/lib/utils";
 import type { Paginated, TaskListItemDTO } from "@/types/dto";
 import { TaskFormDialog } from "./task-form-dialog";
 import { changeStatus, TaskStatusMenu } from "./task-status";
+import { InternalRequestBadge } from "@/components/tickets/ticket-badges";
+
+/** Internal requests are worked on from their ticket page. */
+const hrefFor = (t: TaskListItemDTO) => (t.linkedTicket ? `/tickets/${t.linkedTicket.id}?from=task` : `/tasks/${t.id}`);
 
 const ALL = "__all";
 type View = "list" | "board" | "calendar";
@@ -97,10 +102,11 @@ function ListView({ items, scope, onChanged }: { items: TaskListItemDTO[]; scope
         {items.map((t) => {
           const person = scope === "mine" ? t.assignedBy : t.owner;
           return (
-            <TableRow key={t.id} className="cursor-pointer" onClick={() => router.push(`/tasks/${t.id}`)}>
+            <TableRow key={t.id} className="cursor-pointer" onClick={() => router.push(hrefFor(t))}>
               <TableCell className="max-w-[340px] pl-4">
-                <Link href={`/tasks/${t.id}`} onClick={(e) => e.stopPropagation()} className="block min-w-0">
+                <Link href={hrefFor(t)} onClick={(e) => e.stopPropagation()} className="block min-w-0">
                   <span className="block truncate font-medium hover:text-primary">{t.title}</span>
+                  {t.linkedTicket ? <InternalRequestBadge ticketNumber={t.linkedTicket.ticketNumber} className="my-0.5" /> : null}
                   <span className="flex items-center gap-2 text-xs text-muted-foreground">
                     <span className="font-mono">{t.taskNumber}</span>
                     {t.parentTask ? <span className="truncate">↳ {t.parentTask.taskNumber}</span> : null}
@@ -108,7 +114,7 @@ function ListView({ items, scope, onChanged }: { items: TaskListItemDTO[]; scope
                   </span>
                 </Link>
               </TableCell>
-              <TableCell className="hidden max-w-48 truncate text-sm lg:table-cell">{t.project?.name ?? "—"}</TableCell>
+              <TableCell className="hidden max-w-48 truncate text-sm lg:table-cell">{t.project?.name ?? (t.linkedTicket ? <span className="text-muted-foreground">Internal request</span> : "—")}</TableCell>
               <TableCell className="hidden xl:table-cell">
                 {t.department ? (
                   <span className="inline-flex items-center gap-1.5 text-sm"><span className="size-2 rounded-full" style={{ backgroundColor: t.department.color }} />{t.department.name}</span>
@@ -135,7 +141,8 @@ function ListView({ items, scope, onChanged }: { items: TaskListItemDTO[]; scope
 function BoardView({ items, onChanged, hideClosed }: { items: TaskListItemDTO[]; onChanged: () => void; hideClosed: boolean }) {
   const [dragging, setDragging] = useState<TaskListItemDTO | null>(null);
   const [over, setOver] = useState<TaskStatus | null>(null);
-  const columns = TASK_STATUSES.filter((s) => !(hideClosed && s === "CANCELLED"));
+  const { statuses } = useLabels();
+  const columns = statuses.filter((s) => !(hideClosed && s === "CANCELLED"));
 
   async function drop(status: TaskStatus) {
     const t = dragging;
@@ -176,7 +183,7 @@ function BoardView({ items, onChanged, hideClosed }: { items: TaskListItemDTO[];
             <header className="flex items-center justify-between px-3 py-2.5">
               <span className="flex items-center gap-2 text-sm font-medium">
                 <span className="size-2.5 rounded-full" style={{ backgroundColor: TASK_STATUS_COLORS[status] }} />
-                {humanize(status)}
+                <TaskStatusLabel value={status} />
               </span>
               <span className="tabular rounded-full bg-background px-2 text-xs text-muted-foreground">{cards.length}</span>
             </header>
@@ -184,7 +191,7 @@ function BoardView({ items, onChanged, hideClosed }: { items: TaskListItemDTO[];
               {cards.map((t) => (
                 <Link
                   key={t.id}
-                  href={`/tasks/${t.id}`}
+                  href={hrefFor(t)}
                   draggable={t.allowedStatuses.length > 0}
                   onDragStart={(e) => {
                     e.dataTransfer.effectAllowed = "move";
@@ -205,7 +212,7 @@ function BoardView({ items, onChanged, hideClosed }: { items: TaskListItemDTO[];
                     <PriorityBadge priority={t.priority} />
                   </div>
                   <p className="line-clamp-2 text-sm font-medium">{t.title}</p>
-                  <p className="truncate text-xs text-muted-foreground">{t.project?.name}</p>
+                  {t.linkedTicket ? <InternalRequestBadge ticketNumber={t.linkedTicket.ticketNumber} /> : <p className="truncate text-xs text-muted-foreground">{t.project?.name}</p>}
                   <div className="flex items-center justify-between gap-2">
                     <TaskMeta t={t} />
                     <span className="flex items-center gap-2 text-xs">
@@ -255,10 +262,10 @@ function CalendarView({ items, month, setMonth }: { items: TaskListItemDTO[]; mo
                   {dayTasks.slice(0, 4).map((t) => (
                     <Link
                       key={t.id}
-                      href={`/tasks/${t.id}`}
+                      href={hrefFor(t)}
                       className="block truncate rounded border-l-2 bg-card px-1.5 py-0.5 text-[11px] shadow-xs hover:bg-accent"
                       style={{ borderLeftColor: TASK_STATUS_COLORS[t.status] }}
-                      title={`${t.taskNumber} · ${t.title} (${humanize(t.status)})`}
+                      title={`${t.linkedTicket ? `Internal request ${t.linkedTicket.ticketNumber} · ` : ""}${t.taskNumber} · ${t.title} (${humanize(t.status)})`}
                     >
                       {t.title}
                     </Link>
@@ -289,6 +296,7 @@ export function TasksView({
   canCreateInProject?: boolean;
 }) {
   const canManage = useCan("task:manage");
+  const labels = useLabels();
   const [view, setView] = useState<View>("list");
   const [q, setQ] = useState("");
   const [project, setProject] = useState(projectId ?? "");
@@ -296,6 +304,7 @@ export function TasksView({
   const [status, setStatus] = useState("");
   const [priority, setPriority] = useState("");
   const [due, setDue] = useState("");
+  const [source, setSource] = useState("");
   const [sort, setSort] = useState("dueDate");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -312,6 +321,7 @@ export function TasksView({
     status: statusParam,
     priority,
     due: view === "calendar" ? "" : due,
+    source: projectId ? "" : source,
     sort,
     ...(view === "list"
       ? { page, pageSize }
@@ -329,9 +339,9 @@ export function TasksView({
   const { data: departments } = useDepartmentOptions();
   const canCreate = projectId ? !!canCreateInProject : canManage && !!projects?.some((p) => p.taskDepartments.length);
 
-  const filtersActive = !!(q || (!projectId && project) || department || status || priority || due);
+  const filtersActive = !!(q || (!projectId && project) || department || status || priority || due || source);
   const reset = () => {
-    setQ(""); if (!projectId) setProject(""); setDepartment(""); setStatus(""); setPriority(""); setDue(""); setPage(1);
+    setQ(""); if (!projectId) setProject(""); setDepartment(""); setStatus(""); setPriority(""); setDue(""); setSource(""); setPage(1);
   };
   const set = (fn: (v: string) => void) => (v: string) => { fn(v === ALL ? "" : v); setPage(1); };
   const items = useMemo(() => data?.items ?? [], [data]);
@@ -341,7 +351,7 @@ export function TasksView({
       {!embedded ? (
         <PageHeader
           title={scope === "mine" ? "My Tasks" : "All Tasks"}
-          description={scope === "mine" ? "Tasks you own or collaborate on." : "Tasks across the projects and departments you manage."}
+          description={scope === "mine" ? "Tasks you own or collaborate on, including internal requests assigned to you." : "Tasks across the projects and departments you manage."}
           actions={canCreate ? <Button onClick={() => setCreateOpen(true)}><Plus /> New task</Button> : null}
         />
       ) : null}
@@ -374,6 +384,16 @@ export function TasksView({
                 </SelectContent>
               </Select>
             ) : null}
+            {!projectId ? (
+              <Select value={source || ALL} onValueChange={set(setSource)}>
+                <SelectTrigger className="w-full sm:w-44" aria-label="Source"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL}>All work</SelectItem>
+                  <SelectItem value="project">Project tasks</SelectItem>
+                  <SelectItem value="internal_ticket">Internal requests</SelectItem>
+                </SelectContent>
+              </Select>
+            ) : null}
             <Select value={department || ALL} onValueChange={set(setDepartment)}>
               <SelectTrigger className="w-full sm:w-44" aria-label="Department"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -386,14 +406,14 @@ export function TasksView({
               <SelectContent>
                 <SelectItem value={ALL}>All status</SelectItem>
                 <SelectItem value="open">Open (not closed)</SelectItem>
-                {TASK_STATUSES.map((s) => <SelectItem key={s} value={s}>{humanize(s)}</SelectItem>)}
+                {labels.statuses.map((s) => <SelectItem key={s} value={s}><TaskStatusLabel value={s} /></SelectItem>)}
               </SelectContent>
             </Select>
             <Select value={priority || ALL} onValueChange={set(setPriority)}>
               <SelectTrigger className="w-full sm:w-36" aria-label="Priority"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL}>All priorities</SelectItem>
-                {TASK_PRIORITIES.map((s) => <SelectItem key={s} value={s}>{humanize(s)}</SelectItem>)}
+                {TASK_PRIORITIES.map((s) => <SelectItem key={s} value={s}><PriorityLabel value={s} /></SelectItem>)}
               </SelectContent>
             </Select>
             {view !== "calendar" ? (

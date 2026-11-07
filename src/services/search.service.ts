@@ -3,19 +3,21 @@ import type { CurrentUser } from "@/lib/auth/current-user";
 import { escapeRegex } from "@/lib/api";
 import { hasPermission } from "@/lib/permissions";
 import type { ProjectStatus } from "@/lib/constants";
-import { Department, Project, Task, User } from "@/models";
-import type { TaskStatus } from "@/lib/constants";
+import { Department, Project, Task, Ticket, User } from "@/models";
+import type { TaskStatus, TicketStatus } from "@/lib/constants";
+import { manageScopeFilter, ticketAccessContext } from "./ticket-access";
+import { oid } from "./scope";
 import { accessContext, projectVisibilityFilter, taskVisibilityFilter } from "./access";
 import type { SearchResultDTO } from "@/types/dto";
 import { employeeVisibilityFilter, visibleDepartmentIds } from "./scope";
 
 /** Global search across entities the user is allowed to see. */
 export async function globalSearch(user: CurrentUser, q: string): Promise<SearchResultDTO> {
-  const empty: SearchResultDTO = { employees: [], departments: [], projects: [], tasks: [] };
+  const empty: SearchResultDTO = { employees: [], departments: [], projects: [], tasks: [], tickets: [] };
   if (q.trim().length < 2) return empty;
   const rx = new RegExp(escapeRegex(q.trim()), "i");
 
-  const [employees, departments, projects, tasks] = await Promise.all([
+  const [employees, departments, projects, tasks, tickets] = await Promise.all([
     (async () => {
       if (!hasPermission(user.role, "employee:read")) return [];
       const scope = await employeeVisibilityFilter(user);
@@ -63,7 +65,19 @@ export async function globalSearch(user: CurrentUser, q: string): Promise<Search
         .lean();
       return rows.map((t) => ({ id: t._id.toString(), taskNumber: t.taskNumber, title: t.title, status: t.status as TaskStatus }));
     })(),
+    (async () => {
+      if (!hasPermission(user.role, "ticket:create")) return [];
+      const ctx = await ticketAccessContext(user);
+      const self = oid(user.id);
+      const visible = [{ requester: self }, { assignee: self }, { "assignments.employee": self }, manageScopeFilter(ctx)];
+      const rows = await Ticket.find({ $and: [{ $or: visible }, { $or: [{ title: rx }, { ticketNumber: rx }] }] })
+        .select("ticketNumber title status")
+        .sort({ updatedAt: -1 })
+        .limit(6)
+        .lean();
+      return rows.map((t) => ({ id: t._id.toString(), ticketNumber: t.ticketNumber, title: t.title, status: t.status as TicketStatus }));
+    })(),
   ]);
 
-  return { employees, departments, projects, tasks };
+  return { employees, departments, projects, tasks, tickets };
 }

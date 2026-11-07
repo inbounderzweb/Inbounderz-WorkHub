@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
-import { Building2, CheckSquare, FolderKanban, Search, User } from "lucide-react";
+import { Building2, CheckSquare, FolderKanban, Search, Ticket, User } from "lucide-react";
 import {
   Command,
   CommandDialog,
@@ -19,7 +19,6 @@ import { fetcher, qs } from "@/lib/http";
 import type { SearchResultDTO } from "@/types/dto";
 import { NAV } from "./nav";
 import { useCurrentUser } from "@/components/providers/user-provider";
-import { hasPermission } from "@/lib/permissions";
 
 export function GlobalSearch() {
   const [open, setOpen] = useState(false);
@@ -49,8 +48,8 @@ export function GlobalSearch() {
     router.push(href);
   };
 
-  const pages = NAV.flatMap((s) => s.items).filter((i) => !i.permission || hasPermission(user.role, i.permission));
-  const hasResults = !!data && (data.employees.length || data.departments.length || data.projects.length || data.tasks.length);
+  const pages = NAV.flatMap((s) => s.items).filter((i) => !i.permission || user.permissions.includes(i.permission));
+  const hasResults = !!data && (data.employees.length || data.departments.length || data.projects.length || data.tasks.length || data.tickets.length);
 
   return (
     <>
@@ -60,7 +59,7 @@ export function GlobalSearch() {
         className="flex h-9 w-full min-w-0 max-w-md items-center gap-2 rounded-lg border bg-muted/40 px-3 text-sm text-muted-foreground transition-colors hover:bg-muted"
       >
         <Search className="size-4" />
-        <span className="flex-1 truncate text-left">Search people, projects, tasks…</span>
+        <span className="flex-1 truncate text-left">Search people, projects, tasks, tickets…</span>
         <kbd className="hidden rounded border bg-background px-1.5 py-0.5 font-mono text-[10px] sm:inline">⌘K</kbd>
       </button>
 
@@ -129,6 +128,17 @@ export function GlobalSearch() {
                       <CheckSquare />
                       <span className="flex-1 truncate">{t.title}</span>
                       <span className="font-mono text-xs text-muted-foreground">{t.taskNumber}</span>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              ) : null}
+              {data!.tickets.length ? (
+                <CommandGroup heading="Tickets">
+                  {data!.tickets.map((t) => (
+                    <CommandItem key={t.id} value={`ticket-${t.id}`} onSelect={() => go(`/tickets/${t.id}`)}>
+                      <Ticket />
+                      <span className="flex-1 truncate">{t.title}</span>
+                      <span className="font-mono text-xs text-muted-foreground">{t.ticketNumber}</span>
                     </CommandItem>
                   ))}
                 </CommandGroup>

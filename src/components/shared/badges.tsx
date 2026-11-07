@@ -1,4 +1,7 @@
+"use client";
+
 import { cn } from "@/lib/utils";
+import { PriorityLabel, TaskStatusLabel } from "./labels";
 import { humanize, type RoleKey, type TaskPriority, type TaskStatus, type UserStatus, type ProjectStatus } from "@/lib/constants";
 
 const base = "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap";
@@ -54,7 +57,7 @@ export const TASK_STATUS_COLORS: Record<TaskStatus, string> = {
 };
 
 export function TaskStatusBadge({ status }: { status: TaskStatus }) {
-  return <span className={cn(base, TASK_STATUS_STYLES[status])}>{humanize(status)}</span>;
+  return <span className={cn(base, TASK_STATUS_STYLES[status])}><TaskStatusLabel value={status} /></span>;
 }
 
 const PRIORITY_STYLES: Record<TaskPriority, string> = {
@@ -68,7 +71,7 @@ export function PriorityBadge({ priority }: { priority: TaskPriority }) {
   return (
     <span className={cn("inline-flex items-center gap-1 text-xs font-medium", PRIORITY_STYLES[priority])}>
       <span className="size-1.5 rounded-full bg-current" />
-      {humanize(priority)}
+      <PriorityLabel value={priority} />
     </span>
   );
 }

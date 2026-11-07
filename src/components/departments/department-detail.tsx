@@ -1,5 +1,6 @@
 "use client";
 
+import { TaskStatusLabel } from "@/components/shared/labels";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -180,7 +181,7 @@ export function DepartmentDetail({ id }: { id: string }) {
                   <li key={t.status} className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
                     <span className="flex items-center gap-2 text-muted-foreground">
                       <span className="size-2 rounded-sm" style={{ backgroundColor: TASK_STATUS_COLORS[t.status] }} />
-                      {humanize(t.status)}
+                      <TaskStatusLabel value={t.status} />
                     </span>
                     <span className="tabular font-semibold">{t.count}</span>
                   </li>

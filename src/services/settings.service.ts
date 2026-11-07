@@ -1,7 +1,7 @@
 import "server-only";
 import type { Types } from "mongoose";
 import { escapeRegex, paginate } from "@/lib/api";
-import { PERMISSIONS, type Permission } from "@/lib/permissions";
+import { effectivePermissions, PERMISSIONS, ROLE_PERMISSIONS, type Permission } from "@/lib/permissions";
 import type { RoleKey } from "@/lib/constants";
 import { AuditLog, Role, User } from "@/models";
 import type { ActivityDTO, Paginated } from "@/types/dto";
@@ -14,7 +14,8 @@ export type RoleOverview = {
   name: string;
   description: string;
   level: number;
-  permissions: { key: Permission; label: string }[];
+  permissions: { key: Permission; label: string; base: boolean }[];
+  revoked: Permission[];
   users: number;
   activeUsers: number;
 };
@@ -39,9 +40,11 @@ export async function listRolesOverview(): Promise<RoleOverview[]> {
     name: r.name,
     description: r.description ?? "",
     level: r.level,
-    permissions: (r.permissions as Permission[])
+    // Effective = code matrix ± overrides configured under Settings → Users & roles.
+    permissions: effectivePermissions(r.key as RoleKey)
       .filter((p) => p in PERMISSIONS)
-      .map((p) => ({ key: p, label: PERMISSIONS[p] })),
+      .map((p) => ({ key: p, label: PERMISSIONS[p], base: (ROLE_PERMISSIONS[r.key as RoleKey] ?? []).includes(p) })),
+    revoked: (ROLE_PERMISSIONS[r.key as RoleKey] ?? []).filter((p) => !effectivePermissions(r.key as RoleKey).includes(p)),
     users: map.get(r._id.toString())?.total ?? 0,
     activeUsers: map.get(r._id.toString())?.active ?? 0,
   }));
@@ -52,9 +55,17 @@ export async function listAuditLogs(opts: {
   pageSize: number;
   q: string;
   entityType: string;
+  from?: string;
+  to?: string;
 }): Promise<Paginated<ActivityDTO>> {
   const filter: Record<string, unknown> = {};
   if (opts.entityType) filter.entityType = opts.entityType;
+  if (opts.from || opts.to) {
+    const range: Record<string, Date> = {};
+    if (opts.from) range.$gte = new Date(`${opts.from}T00:00:00.000Z`);
+    if (opts.to) range.$lte = new Date(`${opts.to}T23:59:59.999Z`);
+    filter.createdAt = range;
+  }
   if (opts.q) {
     const rx = new RegExp(escapeRegex(opts.q), "i");
     filter.$or = [{ summary: rx }, { action: rx }];

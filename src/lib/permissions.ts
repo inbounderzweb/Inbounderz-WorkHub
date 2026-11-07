@@ -35,8 +35,10 @@ export const PERMISSIONS = {
   "task:review": "Review and approve tasks",
   "task:update-status": "Update status on own tasks",
   "ticket:create": "Raise internal tickets",
-  "ticket:manage": "Manage internal tickets",
+  "ticket:manage": "Review, assign and reassign internal tickets",
+  "ticket:monitor": "View the ticket management queue (within scope)",
   "daily-update:submit": "Submit daily work updates",
+  "daily-update:review": "Review daily work updates (approve / request changes)",
   // Reporting & system
   "report:company": "View company-wide reports",
   "report:project": "View project-level reports",
@@ -62,6 +64,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
     "task:update-status",
     "ticket:create",
     "ticket:manage",
+    "ticket:monitor",
     "daily-update:submit",
     "report:project",
   ],
@@ -78,7 +81,9 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
     "task:review",
     "task:update-status",
     "ticket:create",
+    "ticket:monitor",
     "daily-update:submit",
+    "daily-update:review",
     "report:department",
   ],
   TEAM_LEADER: [
@@ -101,9 +106,48 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
   ],
 };
 
+/**
+ * Permissions a Super Admin may grant or revoke per role (Settings → Users & roles).
+ * Structural permissions (employee/department/project/task management, settings)
+ * stay fixed in code: changing them could orphan or corrupt workflow records.
+ * Every grant is still limited by the scope rules in the service layer.
+ */
+export const CONFIGURABLE_PERMISSIONS: Permission[] = [
+  "employee:read",
+  "ticket:create",
+  "ticket:monitor",
+  "daily-update:submit",
+  "daily-update:review",
+  "report:company",
+  "report:project",
+  "report:department",
+  "audit:read",
+];
+
+export type PermissionOverrides = Partial<Record<RoleKey, { grant?: Permission[]; revoke?: Permission[] }>>;
+
+declare global {
+  var __workhubPermissionOverrides: PermissionOverrides | undefined;
+}
+
+/** Server: installed by the settings loader on every request (cached briefly). */
+export function setPermissionOverrides(overrides: PermissionOverrides): void {
+  globalThis.__workhubPermissionOverrides = overrides;
+}
+
+/** Base matrix ± configured overrides. Super Admin is never overridden. */
+export function effectivePermissions(role: RoleKey, overrides: PermissionOverrides | undefined = globalThis.__workhubPermissionOverrides): Permission[] {
+  const base = ROLE_PERMISSIONS[role] ?? [];
+  if (role === "SUPER_ADMIN" || !overrides?.[role]) return base;
+  const o = overrides[role]!;
+  const allowed = (list?: Permission[]) => (list ?? []).filter((p) => CONFIGURABLE_PERMISSIONS.includes(p));
+  const revoke = new Set(allowed(o.revoke));
+  return [...new Set([...base.filter((p) => !revoke.has(p)), ...allowed(o.grant)])];
+}
+
 export function hasPermission(role: RoleKey | undefined | null, permission: Permission): boolean {
   if (!role) return false;
-  return ROLE_PERMISSIONS[role]?.includes(permission) ?? false;
+  return effectivePermissions(role).includes(permission);
 }
 
 /**

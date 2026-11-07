@@ -1,7 +1,7 @@
 import { Schema, type InferSchemaType, type Types } from "mongoose";
 import { defineModel } from "./_helpers";
 
-export const ATTACHMENT_ENTITY_TYPES = ["Task", "TaskComment", "Project", "DailyUpdate"] as const;
+export const ATTACHMENT_ENTITY_TYPES = ["Task", "TaskComment", "Project", "DailyUpdate", "Ticket"] as const;
 
 const AttachmentSchema = new Schema(
   {
@@ -13,6 +13,8 @@ const AttachmentSchema = new Schema(
     entityType: { type: String, enum: ATTACHMENT_ENTITY_TYPES, required: true },
     entityId: { type: Schema.Types.ObjectId, refPath: "entityType", required: true },
     uploadedBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    /** Tickets only: FILE = reference material, DELIVERABLE = work submitted by the assignee. */
+    kind: { type: String, enum: ["FILE", "DELIVERABLE"], default: "FILE" },
   },
   { timestamps: true }
 );

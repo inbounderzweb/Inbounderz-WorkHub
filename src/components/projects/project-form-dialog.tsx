@@ -1,5 +1,6 @@
 "use client";
 
+import { PriorityLabel } from "@/components/shared/labels";
 import { useEffect, useMemo, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -253,7 +254,7 @@ export function ProjectFormDialog({
         <Controller control={control} name="priority" render={({ field }) => (
           <Select value={field.value} onValueChange={field.onChange}>
             <SelectTrigger id="p-priority" className="w-full"><SelectValue /></SelectTrigger>
-            <SelectContent>{TASK_PRIORITIES.map((p) => <SelectItem key={p} value={p}>{humanize(p)}</SelectItem>)}</SelectContent>
+            <SelectContent>{TASK_PRIORITIES.map((p) => <SelectItem key={p} value={p}><PriorityLabel value={p} /></SelectItem>)}</SelectContent>
           </Select>
         )} />
       </FormRow>

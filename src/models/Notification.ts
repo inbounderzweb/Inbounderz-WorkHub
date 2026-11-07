@@ -13,6 +13,10 @@ const NotificationSchema = new Schema(
     link: { type: String, default: "" },
     entityType: { type: String, default: "" },
     entityId: { type: Schema.Types.ObjectId, default: null },
+    /** Preference bucket (see NOTIFICATION_PREFS); null = always delivered. */
+    pref: { type: String, default: null },
+    /** Set for reminders so the same reminder is never delivered twice. */
+    dedupeKey: { type: String, default: null },
     isRead: { type: Boolean, default: false },
     readAt: { type: Date, default: null },
   },
@@ -20,6 +24,8 @@ const NotificationSchema = new Schema(
 );
 
 NotificationSchema.index({ recipient: 1, isRead: 1, createdAt: -1 });
+NotificationSchema.index({ recipient: 1, type: 1, createdAt: -1 });
+NotificationSchema.index({ dedupeKey: 1 }, { unique: true, partialFilterExpression: { dedupeKey: { $type: "string" } } });
 // Keep notifications for 180 days.
 NotificationSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 180 });
 

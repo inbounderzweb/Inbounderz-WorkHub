@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { format, formatDistanceToNow } from "date-fns";
@@ -15,7 +15,9 @@ import { EmptyState, ErrorState } from "@/components/shared/states";
 import { TableSkeleton } from "@/components/shared/skeletons";
 import { NOTIFICATIONS_KEY } from "@/components/layout/notifications-menu";
 import { api, fetcher, qs } from "@/lib/http";
-import { humanize } from "@/lib/constants";
+import { NOTIFICATION_TYPES, humanize } from "@/lib/constants";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { NotificationPreferences } from "./notification-preferences";
 import { cn } from "@/lib/utils";
 import type { NotificationDTO, Paginated } from "@/types/dto";
 
@@ -24,10 +26,12 @@ type Resp = Paginated<NotificationDTO> & { unreadCount: number };
 export function NotificationsView() {
   const router = useRouter();
   const { mutate: globalMutate } = useSWRConfig();
-  const [tab, setTab] = useState<"all" | "unread">("all");
+  const params = useSearchParams();
+  const [tab, setTab] = useState<"all" | "unread" | "preferences">(params.get("tab") === "preferences" ? "preferences" : "all");
+  const [type, setType] = useState("");
   const [page, setPage] = useState(1);
   const { data, error, isLoading, mutate } = useSWR<Resp>(
-    `/api/notifications${qs({ page, pageSize: 15, unread: tab === "unread" ? 1 : undefined })}`,
+    `/api/notifications${qs({ page, pageSize: 15, unread: tab === "unread" ? 1 : undefined, type })}`,
     fetcher,
     { keepPreviousData: true }
   );
@@ -62,12 +66,25 @@ export function NotificationsView() {
           </Button>
         }
       />
-      <Tabs value={tab} onValueChange={(v) => { setTab(v as "all" | "unread"); setPage(1); }}>
-        <TabsList>
-          <TabsTrigger value="all">All</TabsTrigger>
-          <TabsTrigger value="unread">Unread{data?.unreadCount ? ` (${data.unreadCount})` : ""}</TabsTrigger>
-        </TabsList>
-      </Tabs>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Tabs value={tab} onValueChange={(v) => { setTab(v as typeof tab); setPage(1); }}>
+          <TabsList>
+            <TabsTrigger value="all">All</TabsTrigger>
+            <TabsTrigger value="unread">Unread{data?.unreadCount ? ` (${data.unreadCount})` : ""}</TabsTrigger>
+            <TabsTrigger value="preferences">Preferences</TabsTrigger>
+          </TabsList>
+        </Tabs>
+        {tab !== "preferences" ? (
+          <Select value={type || "__all"} onValueChange={(v) => { setType(v === "__all" ? "" : v); setPage(1); }}>
+            <SelectTrigger className="w-44" aria-label="Notification type"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all">All types</SelectItem>
+              {NOTIFICATION_TYPES.map((t) => <SelectItem key={t} value={t}>{humanize(t)}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        ) : null}
+      </div>
+      {tab === "preferences" ? <NotificationPreferences /> : (
       <div className="overflow-hidden rounded-xl border bg-card shadow-xs">
         {error ? (
           <ErrorState message={error.message} onRetry={() => mutate()} />
@@ -122,6 +139,7 @@ export function NotificationsView() {
           </>
         )}
       </div>
+      )}
     </div>
   );
 }
