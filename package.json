@@ -8,6 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "test:project-workflow": "node scripts/test-project-workflow.mjs",
+    "test:ticket-routing": "node scripts/test-ticket-routing.mjs",
+    "test:ticket-review": "node scripts/test-ticket-review.mjs",
+    "test:ticket-review-rules": "tsx scripts/test-ticket-review-rules.ts",
     "seed": "tsx --conditions=react-server scripts/seed.ts",
     "seed:demo": "tsx --conditions=react-server scripts/seed-demo.ts",
     "db:dev": "tsx scripts/dev-db.ts"

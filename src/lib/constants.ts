@@ -92,6 +92,8 @@ export const DEPENDENCY_GATED_STATUSES: TaskStatus[] = ["IN_PROGRESS", "IN_REVIE
 
 /** Who must approve a task submitted for review. */
 export const APPROVAL_MODES = ["DEPARTMENT", "PROJECT_MANAGER"] as const;
+export const WORK_APPROVAL_STATUSES = ["NOT_REQUIRED", "PENDING", "APPROVED", "CHANGES_REQUESTED"] as const;
+export type WorkApprovalStatus = (typeof WORK_APPROVAL_STATUSES)[number];
 export type ApprovalMode = (typeof APPROVAL_MODES)[number];
 export const APPROVAL_MODE_LABELS: Record<ApprovalMode, string> = {
   DEPARTMENT: "Department Head or Team Leader",
@@ -128,9 +130,62 @@ const LABEL_OVERRIDES: Record<string, string> = { TODO: "To Do" };
 
 export function humanize(value: string): string {
   if (LABEL_OVERRIDES[value]) return LABEL_OVERRIDES[value];
+  if (TICKET_STATUS_LABELS[value]) return TICKET_STATUS_LABELS[value];
   return value
     .toLowerCase()
     .split("_")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
 }
+
+/* ------------------------------------------------------------------ */
+/* Cross-department tickets                                            */
+/* ------------------------------------------------------------------ */
+
+export const TICKET_STATUSES = [
+  "DRAFT",
+  "PENDING_APPROVAL",
+  "UNDER_REVIEW",
+  "PENDING_CLARIFICATION",
+  "APPROVED",
+  "UNASSIGNED",
+  "ASSIGNED",
+  "IN_PROGRESS",
+  "ON_HOLD",
+  "SUBMITTED_FOR_REVIEW",
+  "COMPLETED",
+  "REJECTED",
+  "CANCELLED",
+] as const;
+export type TicketStatus = (typeof TICKET_STATUSES)[number];
+export const TICKET_CLOSED_STATUSES: TicketStatus[] = ["COMPLETED", "REJECTED", "CANCELLED"];
+/** Waiting on the target department's Project Manager. */
+export const TICKET_TRIAGE_STATUSES: TicketStatus[] = ["PENDING_APPROVAL", "UNDER_REVIEW", "UNASSIGNED"];
+/** Counts against an employee's capacity. */
+export const TICKET_ACTIVE_WORK_STATUSES: TicketStatus[] = ["ASSIGNED", "IN_PROGRESS", "ON_HOLD"];
+export const TICKET_STATUS_LABELS: Record<string, string> = {
+  PENDING_APPROVAL: "Pending Approval",
+  SUBMITTED_FOR_REVIEW: "Review Pending",
+};
+
+/**
+ * State of the deliverable review, independent of the ticket status. `NONE` = no work submitted yet.
+ * Rejected work goes back to the assignee (ticket status IN_PROGRESS) with CHANGES_REQUESTED.
+ */
+export const REVIEW_STATUSES = ["NONE", "PENDING", "CHANGES_REQUESTED", "APPROVED"] as const;
+export type ReviewStatus = (typeof REVIEW_STATUSES)[number];
+export const REVIEW_STATUS_LABELS: Record<ReviewStatus, string> = {
+  NONE: "Not submitted",
+  PENDING: "Pending review",
+  CHANGES_REQUESTED: "Changes requested",
+  APPROVED: "Approved",
+};
+/** A review that has been waiting this long counts as overdue in the review queue. */
+export const REVIEW_OVERDUE_HOURS = 48;
+
+export const TICKET_CATEGORIES = ["Design", "Development", "Content", "Marketing", "Support", "Other"] as const;
+
+/** Workload model used when a Project Manager picks an assignee. */
+export const EMPLOYEE_CAPACITY_ITEMS = 5;
+export const EMPLOYEE_CAPACITY_HOURS = 40;
+export type Availability = "AVAILABLE" | "LIMITED" | "FULL";

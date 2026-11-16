@@ -1,7 +1,7 @@
 import { Schema, type InferSchemaType, type Types } from "mongoose";
 import { defineModel } from "./_helpers";
 
-export const ATTACHMENT_ENTITY_TYPES = ["Task", "TaskComment", "Project", "DailyUpdate"] as const;
+export const ATTACHMENT_ENTITY_TYPES = ["Task", "TaskComment", "Project", "DailyUpdate", "Ticket"] as const;
 
 const AttachmentSchema = new Schema(
   {

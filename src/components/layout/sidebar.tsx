@@ -30,7 +30,8 @@ export function SidebarNav({ collapsed = false, onNavigate }: { collapsed?: bool
               <div className="mx-auto mb-1 h-px w-6 bg-sidebar-border" />
             )}
             {items.map((item) => {
-              const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+              // The Review queue lives under /tickets, so "Tickets" must not light up on that page.
+              const active = pathname === item.href || (pathname.startsWith(`${item.href}/`) && !(item.href === "/tickets" && pathname.startsWith("/tickets/reviews")));
               const link = (
                 <Link
                   key={item.href}

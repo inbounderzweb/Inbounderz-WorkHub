@@ -1,5 +1,5 @@
 import { Schema, type InferSchemaType, type Types } from "mongoose";
-import { APPROVAL_MODES, TASK_PRIORITIES, TASK_STATUSES } from "@/lib/constants";
+import { APPROVAL_MODES, TASK_PRIORITIES, TASK_STATUSES, WORK_APPROVAL_STATUSES } from "@/lib/constants";
 import { defineModel } from "./_helpers";
 
 const ChecklistItemSchema = new Schema(
@@ -8,6 +8,20 @@ const ChecklistItemSchema = new Schema(
     done: { type: Boolean, default: false },
     doneBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
     doneAt: { type: Date, default: null },
+  },
+  { _id: true }
+);
+
+const TimeLogSchema = new Schema(
+  {
+    user: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    startedAt: { type: Date, required: true },
+    endedAt: { type: Date, required: true },
+    seconds: { type: Number, min: 0, default: 0 },
+    /** Optional note from the person who paused. */
+    pauseReason: { type: String, trim: true, default: "", maxlength: 500 },
+    /** PAUSED = paused manually; AUTO = stopped because the task left In Progress / was reassigned. */
+    endKind: { type: String, enum: ["PAUSED", "AUTO"], default: "PAUSED" },
   },
   { _id: true }
 );
@@ -41,6 +55,15 @@ const TaskSchema = new Schema(
     completedAt: { type: Date, default: null },
 
     // Review / approval
+    /** Approval of a work request before work starts, separate from completion review. */
+    workApproval: {
+      status: { type: String, enum: WORK_APPROVAL_STATUSES, default: "NOT_REQUIRED" },
+      requestedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+      requestedAt: { type: Date, default: null },
+      reviewedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+      reviewedAt: { type: Date, default: null },
+      comment: { type: String, trim: true, default: "", maxlength: 2000 },
+    },
     approvalRequired: { type: Boolean, default: true },
     approvalMode: { type: String, enum: APPROVAL_MODES, default: "DEPARTMENT" },
     submittedAt: { type: Date, default: null },
@@ -55,6 +78,15 @@ const TaskSchema = new Schema(
       reportedAt: { type: Date, default: null },
     },
 
+    /** Work timer. `totalSeconds` = closed sessions; a running session adds (now - startedAt). */
+    timer: {
+      running: { type: Boolean, default: false },
+      startedAt: { type: Date, default: null },
+      by: { type: Schema.Types.ObjectId, ref: "User", default: null },
+      totalSeconds: { type: Number, min: 0, default: 0 },
+    },
+    timeLog: { type: [TimeLogSchema], default: [] },
+
     estimatedHours: { type: Number, min: 0, default: null },
     actualHours: { type: Number, min: 0, default: null },
     tags: [{ type: String, trim: true, maxlength: 40 }],
@@ -65,6 +97,7 @@ const TaskSchema = new Schema(
 );
 
 TaskSchema.index({ project: 1, status: 1 });
+TaskSchema.index({ project: 1, "workApproval.status": 1, status: 1 });
 TaskSchema.index({ owner: 1, status: 1, dueDate: 1 });
 TaskSchema.index({ collaborators: 1, status: 1 });
 TaskSchema.index({ department: 1, status: 1 });
@@ -72,6 +105,7 @@ TaskSchema.index({ parentTask: 1 });
 TaskSchema.index({ status: 1, dueDate: 1 });
 TaskSchema.index({ taskNumber: 1 }, { unique: true });
 TaskSchema.index({ dependencies: 1 });
+TaskSchema.index({ "timer.by": 1, "timer.running": 1 });
 TaskSchema.index({ milestone: 1 });
 
 export type TaskDoc = InferSchemaType<typeof TaskSchema> & { _id: Types.ObjectId };

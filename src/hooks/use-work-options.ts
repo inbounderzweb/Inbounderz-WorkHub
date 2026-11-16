@@ -8,9 +8,10 @@ export function useProjectOptions(enabled = true) {
   return useSWR<ProjectOptionDTO[]>(enabled ? "/api/projects?minimal=1" : null, fetcher);
 }
 
-export function useProjectTeam(projectId: string | null | undefined, department?: string | null) {
+/** `staff`: also list the department's own employees who aren't allocated to the project yet (for assigning tasks). */
+export function useProjectTeam(projectId: string | null | undefined, department?: string | null, staff = false) {
   return useSWR<TeamMemberOptionDTO[]>(
-    projectId ? `/api/projects/${projectId}/team${qs({ department: department ?? undefined })}` : null,
+    projectId ? `/api/projects/${projectId}/team${qs({ department: department ?? undefined, staff: staff ? 1 : undefined })}` : null,
     fetcher
   );
 }

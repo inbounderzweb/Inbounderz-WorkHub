@@ -45,9 +45,9 @@ export async function visibleDepartmentIds(user: CurrentUser): Promise<Types.Obj
   }
 }
 
-/** Departments the user may *manage* employees in (create/edit/activate). */
+/** Department scope for employee mutations, checked after the action's permission. */
 export async function managedDepartmentIds(user: CurrentUser): Promise<Types.ObjectId[] | null> {
-  if (user.role === "SUPER_ADMIN") return null;
+  if (user.role === "SUPER_ADMIN" || user.role === "PROJECT_MANAGER") return null;
   if (user.role === "DEPARTMENT_HEAD") return headedDepartmentIds(user.id);
   return [];
 }
@@ -57,7 +57,7 @@ export async function employeeVisibilityFilter(user: CurrentUser): Promise<Filte
   const self = oid(user.id);
   switch (user.role) {
     case "SUPER_ADMIN":
-    case "PROJECT_MANAGER": // read-only company directory, needed to staff projects
+    case "PROJECT_MANAGER": // company directory, needed to staff projects
       return {};
     case "DEPARTMENT_HEAD": {
       const depts = await headedDepartmentIds(user.id);

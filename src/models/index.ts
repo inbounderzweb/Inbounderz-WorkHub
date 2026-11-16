@@ -12,3 +12,7 @@ export { Attachment } from "./Attachment";
 export { Notification } from "./Notification";
 export { AuditLog } from "./AuditLog";
 export { Counter, nextSequence } from "./Counter";
+export { Ticket } from "./Ticket";
+export { TicketActivity } from "./TicketActivity";
+export { TicketQueue } from "./TicketQueue";
+export { WorkloadSettings } from "./WorkloadSettings";

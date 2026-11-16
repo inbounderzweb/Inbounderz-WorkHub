@@ -15,6 +15,8 @@ export type AccessContext = {
   managed: Set<string>;
   /** Projects where the user is an active team member (any project role). */
   memberOf: Set<string>;
+  /** Department represented by each active project membership. */
+  memberDepartments: Map<string, string>;
   headed: Set<string>;
   led: Set<string>;
 };
@@ -25,7 +27,7 @@ export async function accessContext(user: CurrentUser): Promise<AccessContext> {
   const self = oid(user.id);
   const [managedProjects, memberships, headed, led] = await Promise.all([
     Project.find({ manager: self }).select("_id").lean(),
-    ProjectMember.find({ user: self, isActive: true }).select("project projectRole").lean(),
+    ProjectMember.find({ user: self, isActive: true }).select("project projectRole department").lean(),
     user.role === "DEPARTMENT_HEAD" || user.role === "SUPER_ADMIN" ? headedDepartmentIds(user.id) : Promise.resolve([]),
     user.role === "TEAM_LEADER" ? ledDepartmentIds(user.id) : Promise.resolve([]),
   ]);
@@ -36,6 +38,7 @@ export async function accessContext(user: CurrentUser): Promise<AccessContext> {
     isAdmin: user.role === "SUPER_ADMIN",
     managed,
     memberOf: ids(memberships.map((m) => m.project)),
+    memberDepartments: new Map(memberships.filter((m) => m.department).map((m) => [m.project.toString(), m.department!.toString()])),
     headed: ids(headed),
     led: ids(led),
   };
@@ -70,6 +73,11 @@ export function canManageProject(ctx: AccessContext, projectId: unknown): boolea
   return ctx.isAdmin || ctx.managed.has(s(projectId));
 }
 
+/** A department leader allocated to a project can lead that department's work there. */
+function leadsProjectDepartment(ctx: AccessContext, projectId: unknown, department: string): boolean {
+  return ["DEPARTMENT_HEAD", "TEAM_LEADER"].includes(ctx.user.role) && ctx.memberDepartments.get(s(projectId)) === department;
+}
+
 /** Departments of this project in which the user may create/assign tasks. */
 export function taskCreationDepartments(
   ctx: AccessContext,
@@ -77,7 +85,7 @@ export function taskCreationDepartments(
 ): string[] {
   const depts = project.departments.map((d) => d.toString());
   if (canManageProject(ctx, project._id)) return depts;
-  return depts.filter((d) => ctx.headed.has(d) || ctx.led.has(d));
+  return depts.filter((d) => ctx.headed.has(d) || ctx.led.has(d) || leadsProjectDepartment(ctx, project._id, d));
 }
 
 /* --------------------------------- Tasks -------------------------------- */
@@ -99,6 +107,9 @@ export function taskVisibilityFilter(ctx: AccessContext): Filter {
   if (ctx.managed.size) or.push({ project: { $in: toOids(ctx.managed) } });
   const depts = toOids(new Set([...ctx.headed, ...ctx.led]));
   if (depts.length) or.push({ department: { $in: depts } });
+  if (["DEPARTMENT_HEAD", "TEAM_LEADER"].includes(ctx.user.role)) {
+    for (const [project, department] of ctx.memberDepartments) or.push({ project: oid(project), department: oid(department) });
+  }
   return { $or: or };
 }
 
@@ -114,7 +125,7 @@ export function canManageTask(ctx: AccessContext, task: TaskLike): boolean {
   if (ctx.isAdmin) return true;
   if (ctx.managed.has(s(task.project))) return true;
   const dept = s(task.department);
-  return !!dept && (ctx.headed.has(dept) || ctx.led.has(dept));
+  return !!dept && (ctx.headed.has(dept) || ctx.led.has(dept) || leadsProjectDepartment(ctx, task.project, dept));
 }
 
 export function canViewTask(ctx: AccessContext, task: TaskLike): boolean {

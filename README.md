@@ -73,6 +73,8 @@ All demo accounts use the password `Demo@12345`:
 | --- | --- |
 | `npm run dev` / `build` / `start` | Next.js |
 | `npm run lint` / `typecheck` | ESLint / TypeScript |
+| `npm run test:project-workflow` | Local integration checks for work requests, assignment, approval and project access (requires the dev app and MongoDB; temporary records are removed) |
+| `npm run test:ticket-routing` | Local integration checks for selecting ticket reviewers, notifications, queues and approval (temporary records are removed) |
 | `npm run seed` | Syncs roles and indexes, creates the Super Admin. Safe to re-run. Add `-- --reset-admin-password` to rotate the bootstrap admin's password |
 | `npm run seed:demo` | Optional demo data |
 | `npm run db:dev` | Local MongoDB for development |
@@ -135,7 +137,17 @@ Removing someone from a project ends their allocation (`isActive: false`, `leftA
 3. Only employees allocated to the project under the chosen department can be the owner.
 4. Collaborators can be anyone on the active project team.
 
-The server re-checks every one of these selections, including reassignments. Task numbers (`TSK-00001`) are generated automatically.
+The server re-checks every selection, including reassignments. Task numbers (`TSK-00001`) are generated automatically. Department Heads and Team Leaders allocated to a project can request and assign work within the department they represent. They can choose themselves or an active department employee; assigning someone also allocates them to the project.
+
+### Requesting Project Manager approval before work starts
+
+1. A Department Head or Team Leader opens **Create task**, selects the project and department, and describes the work.
+2. Keep **Request Project Manager approval before work starts** enabled. Choose a proposed assignee, use **Assign to me**, or leave the assignee empty for the manager to decide.
+3. **Send to Project Manager** places the request on every project manager's dashboard under **Work requests awaiting approval**, in the project's task list, and in **All Tasks → Awaiting PM approval**. The project managers receive a notification.
+4. A project manager opens the request and approves the proposed assignee, or uses **Assign → Approve and assign** to choose someone else. They can also request changes to the description; the requester edits it and requests approval again.
+5. Pending requests and requests needing changes cannot start work, track time, log hours, or complete checklist items. After approval, the normal task workflow applies.
+
+The **Assign** dialog also offers **Request Project Manager approval** for a new proposed assignment. This approval is separate from **Requires approval to complete**, which controls review of finished work. Existing tasks keep their current workflow unless approval is requested.
 
 ### Who can assign tasks
 
@@ -190,13 +202,21 @@ An archived project and its tasks become read-only, and the project is hidden fr
 - **Downloads:** go through `/api/attachments/:id`, which checks the viewer's access to the task or project first.
 - **Storage:** files are stored on local disk by default (`src/lib/storage.ts`). For serverless or multi-server hosting, implement the same small interface on S3/R2.
 
+## Choosing a Project Manager for a ticket
+
+**My Tasks** includes **Project tasks** and **Assigned tickets** tabs. If you have tickets assigned to you and no project tasks, the ticket tab opens automatically. Tickets on hold remain visible there; open the ticket to resume work or use its other permitted actions.
+
+In **Raise a ticket** or **Edit ticket**, use **Project Manager (optional)** to choose an active Project Manager to review the request. They receive the notification and see the ticket in their **Approval queue**, even if they are not configured as a manager of the target department. Leave the field empty to use the department's default reviewers.
+
+The dropdown lists active Project Managers by name. The requester can change the selection while the ticket is a draft, awaiting approval, or waiting for clarification. Changing the manager on a submitted ticket clears the previous review and sends it for approval again. Selecting a manager routes the review request; an employee is assigned only when the manager approves and assigns the work.
+
 ## Roles and permissions
 
 The matrix is defined in `src/lib/permissions.ts`, synced to the `roles` collection, and **enforced on the server** on every request. The sidebar only reflects it. Super Admins can view the matrix under **Settings → Roles & permissions**.
 
 | | Super Admin | Project Manager | Department Head | Team Leader | Employee |
 | --- | --- | --- | --- | --- | --- |
-| Employees | Full | Read directory | Create/edit/activate **Employees and Team Leaders in departments they head** | Read own team | Own profile |
+| Employees | Full | Read directory; create **Department Heads, Team Leaders and Employees in any active department** | Create/edit/activate **Employees and Team Leaders in departments they head** | Read own team | Own profile |
 | Departments | Full | Read all | Read; manage team leaders of departments they head | Read own | Read own |
 | Dashboard | Company | Managed projects | Department | Team | Personal |
 | Settings / audit log | ✓ | — | — | — | — |

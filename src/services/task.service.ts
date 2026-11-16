@@ -3,7 +3,7 @@ import type { Types } from "mongoose";
 import type { z } from "zod";
 import { utcDayRange } from "@/lib/dates";
 import type { CurrentUser } from "@/lib/auth/current-user";
-import { ApiError, escapeRegex, forbidden, notFound, paginate, unprocessable } from "@/lib/api";
+import { ApiError, conflict, escapeRegex, forbidden, notFound, paginate, unprocessable } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { hasPermission } from "@/lib/permissions";
 import {
@@ -15,6 +15,7 @@ import {
   type ApprovalMode,
   type TaskPriority,
   type TaskStatus,
+  type WorkApprovalStatus,
 } from "@/lib/constants";
 import { allowedTransitions, reviewAvailable, type WorkflowContext } from "@/lib/task-workflow";
 import type {
@@ -22,6 +23,7 @@ import type {
   createTaskSchema,
   taskListQuerySchema,
   updateTaskSchema,
+  workApprovalSchema,
 } from "@/lib/validations/task";
 import { Department, Milestone, nextSequence, Project, ProjectMember, Task, TaskActivity, TaskComment, User } from "@/models";
 import type { TASK_ACTIVITY_ACTIONS } from "@/models/TaskActivity";
@@ -31,6 +33,7 @@ import type { Paginated, TaskDetailDTO, TaskListItemDTO, TaskRefDTO } from "@/ty
 import {
   accessContext,
   canManageTask,
+  canManageProject,
   canReviewTask,
   canViewProject,
   canViewTask,
@@ -58,6 +61,9 @@ const s = (v: unknown): string =>
   !v ? "" : typeof v === "object" && "_id" in (v as object) ? String((v as { _id: unknown })._id) : String(v);
 const uniq = (ids: string[]) => [...new Set(ids)];
 
+/** Statuses in which the owner may start the work timer. */
+const TIMER_STATUSES = ["BACKLOG", "TODO", "ON_HOLD", "IN_PROGRESS", "CHANGES_REQUESTED"];
+
 /* ------------------------------------------------------------------ */
 /* Loading & permission helpers                                        */
 /* ------------------------------------------------------------------ */
@@ -75,10 +81,15 @@ async function loadTaskForUser(user: CurrentUser, id: string) {
 
 /** Owner/collaborator rights only count while the person is still on the project team. */
 function roles(ctx: AccessContext, task: TaskDoc | any) {
-  const activeOnProject = !task.project || ctx.memberOf.has(s(task.project)) || ctx.managed.has(s(task.project));
+  // A department head who owns a task in their own department counts as on the project
+  // (they are the fallback owner when nobody from that department is allocated).
+  const activeOnProject =
+    !task.project || ctx.memberOf.has(s(task.project)) || ctx.managed.has(s(task.project)) || (!!task.department && ctx.headed.has(s(task.department)));
   const manage = canManageTask(ctx, task);
   return {
     manage,
+    /** Project manager / admin / department lead, or the person who created the task. */
+    reassign: manage || (!!task.createdBy && s(task.createdBy._id ?? task.createdBy) === ctx.user.id),
     owner: isOwner(ctx, task) && activeOnProject,
     collaborator: isCollaborator(ctx, task) && activeOnProject,
     review: canReviewTask(ctx, task),
@@ -90,13 +101,36 @@ function assertWritable(project: { isArchived?: boolean | null } | null) {
 }
 
 function workflowContext(task: any, r: ReturnType<typeof roles>): WorkflowContext {
+  const waiting = workApprovalPending(task);
   return {
     status: task.status as TaskStatus,
     approvalRequired: task.approvalRequired !== false,
-    isOwner: r.owner,
-    canManage: r.manage,
-    canReview: r.review,
+    isOwner: r.owner && !waiting,
+    canManage: r.manage && !waiting,
+    canReview: r.review && !waiting,
   };
+}
+
+function workApprovalPending(task: any): boolean {
+  return ["PENDING", "CHANGES_REQUESTED"].includes(task.workApproval?.status);
+}
+
+function assertWorkApproved(task: any) {
+  if (workApprovalPending(task)) throw unprocessable("The Project Manager must approve this work request before work starts.");
+}
+
+async function projectManagersFor(projectId: Types.ObjectId | string): Promise<string[]> {
+  const [project, members] = await Promise.all([
+    Project.findById(projectId).select("manager").lean(),
+    ProjectMember.find({ project: projectId, projectRole: "MANAGER", isActive: true }).select("user").lean(),
+  ]);
+  return uniq([s(project?.manager), ...members.map((m) => s(m.user))].filter(Boolean));
+}
+
+async function notifyWorkRequest(task: any, actorId: string) {
+  await notify({ recipients: await projectManagersFor(task.project), actorId, type: "REVIEW",
+    title: "Project work request awaiting approval", message: `${task.taskNumber} · ${task.title}`,
+    link: `/tasks/${task._id}`, entityType: "Task", entityId: task._id });
 }
 
 async function unresolvedDependencies(depIds: Types.ObjectId[]): Promise<TaskRefDTO[]> {
@@ -116,7 +150,16 @@ async function assertProjectMember(projectId: Types.ObjectId, userId: string, de
     User.findById(userId).select("name status").lean(),
   ]);
   if (!user) throw unprocessable(`${label} not found`);
-  if (!member) {
+  // Department head fallback: allowed as owner when the department has no allocated members.
+  let isFallbackHead = false;
+  if (!member && department) {
+    const dept = await Department.findById(department).select("head").lean();
+    if (dept?.head?.toString() === userId) {
+      const anyMember = await ProjectMember.exists({ project: projectId, department: oid(department), isActive: true });
+      isFallbackHead = !anyMember;
+    }
+  }
+  if (!member && !isFallbackHead) {
     throw unprocessable(
       department
         ? `${user.name} is not allocated to this project under the selected department`
@@ -125,6 +168,31 @@ async function assertProjectMember(projectId: Types.ObjectId, userId: string, de
     );
   }
   if (user.status !== "ACTIVE") throw unprocessable(`${user.name} is inactive`);
+  return user;
+}
+
+/**
+ * Owner rule: an active person who is on the project under this department, or who belongs to the
+ * department (or heads it). People not yet on the project are allocated to it automatically.
+ */
+async function resolveOwner(projectId: Types.ObjectId, userId: string, department: string, actorId: string) {
+  const [user, dept, membership] = await Promise.all([
+    User.findById(userId).select("name status department").lean(),
+    Department.findById(department).select("head").lean(),
+    ProjectMember.findOne({ project: projectId, user: oid(userId) }).select("isActive department").lean(),
+  ]);
+  if (!user) throw unprocessable("Owner not found", { owner: "Owner not found" });
+  if (user.status !== "ACTIVE") throw unprocessable(`${user.name} is inactive`, { owner: "Inactive employee" });
+  const inDept = s(user.department) === department || s(dept?.head) === userId;
+  const onProjectInDept = !!membership?.isActive && s(membership.department) === department;
+  if (!inDept && !onProjectInDept) {
+    throw unprocessable(`${user.name} doesn't belong to the selected department`, { owner: "Not in this department" });
+  }
+  if (!membership) {
+    await ProjectMember.create({ project: projectId, user: oid(userId), department: oid(department), projectRole: "MEMBER", addedBy: oid(actorId) });
+  } else if (!membership.isActive) {
+    await ProjectMember.updateOne({ _id: membership._id }, { $set: { isActive: true, leftAt: null, department: oid(department) } });
+  }
   return user;
 }
 
@@ -176,7 +244,7 @@ async function reviewersFor(task: any): Promise<string[]> {
   if (task.approvalMode === "PROJECT_MANAGER") return pm.filter((x) => x !== s(task.owner));
   const dept = task.department ? await Department.findById(task.department).select("head teamLeaders").lean() : null;
   const leads = uniq([s(dept?.head), ...(dept?.teamLeaders ?? []).map(String)].filter(Boolean)).filter((x) => x !== s(task.owner));
-  return leads.length ? leads : pm.filter((x) => x !== s(task.owner));
+  return uniq([...leads, ...pm]).filter((x) => x !== s(task.owner));
 }
 
 async function supervisorsFor(task: any): Promise<string[]> {
@@ -195,6 +263,7 @@ function toListItem(t: any, ctx: AccessContext, extras: { subtasks: Map<string, 
   if (extras.blockedByDeps.has(t._id.toString())) allowed = allowed.filter((st) => !DEPENDENCY_GATED_STATUSES.includes(st));
   const checklist = t.checklist ?? [];
   return {
+    workApprovalStatus: (t.workApproval?.status ?? "NOT_REQUIRED") as WorkApprovalStatus,
     id: t._id.toString(),
     taskNumber: t.taskNumber,
     title: t.title,
@@ -215,6 +284,15 @@ function toListItem(t: any, ctx: AccessContext, extras: { subtasks: Map<string, 
     checklist: { total: checklist.length, done: checklist.filter((c: any) => c.done).length },
     approvalRequired: t.approvalRequired !== false,
     allowedStatuses: allowed,
+    canReassign: r.reassign && !CLOSED_TASK_STATUSES.includes(t.status as TaskStatus),
+    liveTimer: {
+      running: !!t.timer?.running,
+      startedAt: iso(t.timer?.startedAt),
+      totalSeconds: t.timer?.totalSeconds ?? 0,
+      serverNow: new Date().toISOString(),
+      pauseNote: t.timer?.running ? "" : (t.timeLog ?? []).at(-1)?.pauseReason ?? "",
+      canTrack: r.owner && !workApprovalPending(t) && (!!t.timer?.running || TIMER_STATUSES.includes(t.status)),
+    },
     updatedAt: iso(t.updatedAt)!,
   };
 }
@@ -258,6 +336,8 @@ export async function listTasks(user: CurrentUser, query: ListQuery): Promise<Pa
   if (/^[a-f\d]{24}$/i.test(query.department)) and.push({ department: oid(query.department) });
   if (/^[a-f\d]{24}$/i.test(query.owner)) and.push({ owner: oid(query.owner) });
   if (query.status.length) and.push({ status: { $in: query.status } });
+  if (query.workQueue === "pending") and.push({ "workApproval.status": "PENDING", status: { $nin: CLOSED_TASK_STATUSES } });
+  if (query.workQueue === "unassigned") and.push({ owner: null, status: { $nin: CLOSED_TASK_STATUSES } });
   if (query.priority) and.push({ priority: query.priority });
   if (query.topLevel) and.push({ parentTask: null });
   const now = new Date();
@@ -306,11 +386,15 @@ export async function getTask(user: CurrentUser, id: string): Promise<TaskDetail
     .populate("assignedBy", USER_REF_FIELDS)
     .populate("createdBy", USER_REF_FIELDS)
     .populate("approvedBy", USER_REF_FIELDS)
+    .populate("workApproval.requestedBy", USER_REF_FIELDS)
+    .populate("workApproval.reviewedBy", USER_REF_FIELDS)
     .populate("collaborators", USER_REF_FIELDS)
     .populate("parentTask", "taskNumber title")
     .populate("milestone", "title")
     .populate("dependencies", "taskNumber title status")
     .populate("blocker.reportedBy", USER_REF_FIELDS)
+    .populate("timer.by", USER_REF_FIELDS)
+    .populate("timeLog.user", USER_REF_FIELDS)
     .populate("checklist.doneBy", USER_REF_FIELDS)
     .lean();
 
@@ -332,6 +416,10 @@ export async function getTask(user: CurrentUser, id: string): Promise<TaskDetail
 
   return {
     ...base,
+    workApproval: {
+      requestedBy: toUserRef(t.workApproval?.requestedBy), requestedAt: iso(t.workApproval?.requestedAt),
+      reviewedBy: toUserRef(t.workApproval?.reviewedBy), reviewedAt: iso(t.workApproval?.reviewedAt), comment: t.workApproval?.comment ?? "",
+    },
     description: t.description ?? "",
     collaborators: (t.collaborators ?? []).map(toUserRef).filter(Boolean),
     createdBy: toUserRef(t.createdBy),
@@ -348,6 +436,22 @@ export async function getTask(user: CurrentUser, id: string): Promise<TaskDetail
       reason: t.blocker?.reason ?? "",
       reportedBy: toUserRef(t.blocker?.reportedBy),
       reportedAt: iso(t.blocker?.reportedAt),
+    },
+    timer: {
+      running: !!t.timer?.running,
+      startedAt: iso(t.timer?.startedAt),
+      by: toUserRef(t.timer?.by),
+      totalSeconds: t.timer?.totalSeconds ?? 0,
+      serverNow: new Date().toISOString(),
+      log: (t.timeLog ?? []).slice(-50).reverse().map((l: any) => ({
+        id: l._id.toString(),
+        user: toUserRef(l.user),
+        startedAt: iso(l.startedAt)!,
+        endedAt: iso(l.endedAt)!,
+        seconds: l.seconds ?? 0,
+        pauseReason: l.pauseReason ?? "",
+        endKind: (l.endKind ?? "PAUSED") as "PAUSED" | "AUTO",
+      })),
     },
     checklistItems: (t.checklist ?? []).map((c: any) => ({
       id: c._id.toString(),
@@ -387,14 +491,21 @@ export async function getTask(user: CurrentUser, id: string): Promise<TaskDetail
       createdAt: iso(a.createdAt)!,
     })),
     can: {
-      edit: r.manage && writable,
-      reassign: r.manage && writable,
+      edit: r.reassign && writable,
+      reassign: r.reassign && writable,
+      requestWorkApproval: writable && r.reassign && !canManageProject(ctx, task.project) && ["BACKLOG", "TODO"].includes(task.status) && task.workApproval?.status !== "PENDING",
+      reviewWorkRequest: writable && canManageProject(ctx, task.project) && task.workApproval?.status === "PENDING" && (ctx.isAdmin || s(task.workApproval?.requestedBy) !== user.id),
       review: writable && reviewAvailable(workflowContext(task, r)),
       comment: writable && (workers || canViewTask(ctx, task)),
-      updateChecklist: writable && workers,
+      updateChecklist: writable && workers && !workApprovalPending(task),
       upload: writable && workers,
       reportBlocker: writable && workers && !CLOSED_TASK_STATUSES.includes(task.status as TaskStatus),
-      logHours: writable && (r.manage || r.owner),
+      logHours: writable && (r.manage || r.owner) && !workApprovalPending(task),
+      trackTime:
+        writable &&
+        !workApprovalPending(task) &&
+        r.owner &&
+        (!!t.timer?.running || ["BACKLOG", "TODO", "ON_HOLD", "IN_PROGRESS", "CHANGES_REQUESTED"].includes(task.status)),
       addSubtask: writable && r.manage && !task.parentTask && creationDepts.length > 0 && !CLOSED_TASK_STATUSES.includes(task.status as TaskStatus),
     },
   };
@@ -404,7 +515,7 @@ export async function getTask(user: CurrentUser, id: string): Promise<TaskDetail
 /* Create / update / assign                                            */
 /* ------------------------------------------------------------------ */
 
-export async function createTask(user: CurrentUser, input: CreateInput): Promise<{ id: string; taskNumber: string }> {
+export async function createTask(user: CurrentUser, input: CreateInput): Promise<{ id: string; taskNumber: string; workApprovalStatus: WorkApprovalStatus }> {
   if (!hasPermission(user.role, "task:manage")) throw forbidden();
   const ctx = await accessContext(user);
 
@@ -416,17 +527,29 @@ export async function createTask(user: CurrentUser, input: CreateInput): Promise
     throw unprocessable(`This project is ${project.status.toLowerCase()}; new tasks can't be added`);
   }
 
-  // 2. Department: must participate in the project and be one the actor may assign in.
-  if (!project.departments.some((d) => d.toString() === input.department)) {
-    throw unprocessable("This department is not participating in the project", { department: "Not a project department" });
-  }
-  if (!taskCreationDepartments(ctx, project).includes(input.department)) {
-    throw forbidden("You can't assign tasks in this department");
+  const managesProject = canManageProject(ctx, project._id);
+  // Non-managers may raise work for any department the Project Manager allocated to the project. For a
+  // department that isn't theirs it goes to the Project Manager as a request (they approve and assign).
+  const ownDepartment = managesProject || taskCreationDepartments(ctx, project).includes(input.department);
+  if (!ownDepartment && !project.departments.some((d) => d.toString() === input.department)) {
+    throw forbidden("You can only request work for departments the Project Manager allocated to this project");
   }
 
-  // 3. Owner: allocated to this project under this department. 4. Collaborators: on the project team.
-  const owner = await assertProjectMember(project._id, input.owner, input.department, "Owner");
-  const collaborators = uniq(input.collaborators).filter((c) => c !== input.owner);
+  // 2. Department: any active department. One not yet on the project is added to it.
+  const inProject = project.departments.some((d) => d.toString() === input.department);
+  if (!inProject) {
+    const dept = await Department.findById(input.department).select("name status").lean();
+    if (!dept) throw unprocessable("Department not found", { department: "Department not found" });
+    if (dept.status !== "ACTIVE") throw unprocessable(`${dept.name} is not active`, { department: "Department is not active" });
+    await Project.updateOne({ _id: project._id }, { $addToSet: { departments: oid(input.department) } });
+  }
+
+  // 3. Owner (optional): allocated to this project under this department. 4. Collaborators: on the project team.
+  const ownerId = ownDepartment ? input.owner || null : null;
+  const requestApproval = !managesProject && (input.requestProjectApproval || !ownerId);
+  if (requestApproval && input.description.trim().length < 3) throw unprocessable("Describe the work for the Project Manager", { description: "A work description is required" });
+  const owner = ownerId ? await resolveOwner(project._id, ownerId, input.department, user.id) : null;
+  const collaborators = uniq(input.collaborators).filter((c) => c !== ownerId);
   for (const c of collaborators) await assertProjectMember(project._id, c, null, "Collaborator");
 
   // 5. Parent, dependencies, milestone.
@@ -450,8 +573,9 @@ export async function createTask(user: CurrentUser, input: CreateInput): Promise
     milestone: input.milestone ? oid(input.milestone) : null,
     status: input.status,
     priority: input.priority,
-    owner: owner._id,
-    assignedBy: oid(user.id),
+    owner: owner?._id ?? null,
+    assignedBy: owner && !requestApproval ? oid(user.id) : null,
+    workApproval: requestApproval ? { status: "PENDING", requestedBy: oid(user.id), requestedAt: new Date() } : { status: "NOT_REQUIRED" },
     collaborators: collaborators.map(oid),
     dependencies: uniq(input.dependencies).map(oid),
     checklist: input.checklist.map((text) => ({ text })),
@@ -464,21 +588,40 @@ export async function createTask(user: CurrentUser, input: CreateInput): Promise
   });
 
   await activity(task, user.id, "CREATED", `Created ${task.taskNumber} "${task.title}"`);
-  await activity(task, user.id, "ASSIGNED", `Assigned to ${owner.name}`, null, owner.name);
+  if (owner && !requestApproval) await activity(task, user.id, "ASSIGNED", `Assigned to ${owner.name}`, null, owner.name);
+  if (requestApproval) {
+    await activity(task, user.id, "WORK_APPROVAL_REQUESTED", "Requested Project Manager approval before work starts");
+    await notifyWorkRequest(task, user.id);
+  }
   if (parent) await activity({ _id: parent._id, project: project._id }, user.id, "SUBTASK_ADDED", `Added subtask ${task.taskNumber} "${task.title}"`);
 
+  if (owner && !requestApproval) {
+    await notify({
+      recipients: [owner._id],
+      actorId: user.id,
+      type: "TASK",
+      title: "New task assigned to you",
+      message: `${task.taskNumber} · ${task.title} (${project.name})`,
+      link: `/tasks/${task._id}`,
+      entityType: "Task",
+      entityId: task._id,
+    });
+  } else if (!requestApproval) {
+    // Nobody picked yet: tell the project manager and the department head so someone gets assigned.
+    const dept = await Department.findById(input.department).select("head").lean();
+    await notify({
+      recipients: [project.manager, dept?.head].filter(Boolean) as Types.ObjectId[],
+      actorId: user.id,
+      type: "TASK",
+      title: "New task needs an assignee",
+      message: `${task.taskNumber} · ${task.title} (${project.name})`,
+      link: `/tasks/${task._id}`,
+      entityType: "Task",
+      entityId: task._id,
+    });
+  }
   await notify({
-    recipients: [owner._id],
-    actorId: user.id,
-    type: "TASK",
-    title: "New task assigned to you",
-    message: `${task.taskNumber} · ${task.title} (${project.name})`,
-    link: `/tasks/${task._id}`,
-    entityType: "Task",
-    entityId: task._id,
-  });
-  await notify({
-    recipients: collaborators,
+    recipients: requestApproval ? [] : collaborators,
     actorId: user.id,
     type: "TASK",
     title: "Added as a collaborator",
@@ -488,7 +631,7 @@ export async function createTask(user: CurrentUser, input: CreateInput): Promise
     entityId: task._id,
   });
   await refreshProjectProgress(project._id);
-  return { id: task._id.toString(), taskNumber: task.taskNumber };
+  return { id: task._id.toString(), taskNumber: task.taskNumber, workApprovalStatus: requestApproval ? "PENDING" : "NOT_REQUIRED" };
 }
 
 export async function updateTask(user: CurrentUser, id: string, input: UpdateInput): Promise<void> {
@@ -497,7 +640,8 @@ export async function updateTask(user: CurrentUser, id: string, input: UpdateInp
   const r = roles(ctx, task);
 
   const touched = (Object.keys(input) as (keyof UpdateInput)[]).filter((k) => input[k] !== undefined);
-  if (!r.manage) {
+  if (input.actualHours !== undefined) assertWorkApproved(task);
+  if (!r.manage && !r.reassign) {
     const disallowed = touched.filter((k) => k !== "actualHours");
     if (disallowed.length || !r.owner) throw forbidden("You can only log hours on this task");
   }
@@ -584,27 +728,54 @@ export async function updateTask(user: CurrentUser, id: string, input: UpdateInp
   }
 }
 
-export async function assignTask(user: CurrentUser, id: string, input: z.output<typeof assignTaskSchema>): Promise<void> {
+export async function assignTask(user: CurrentUser, id: string, input: z.output<typeof assignTaskSchema>, expectedUpdatedAt?: Date): Promise<void> {
   const { ctx, task, project } = await loadTaskForUser(user, id);
+  if (expectedUpdatedAt && task.updatedAt.getTime() !== expectedUpdatedAt.getTime()) throw conflict("This request changed. Review the latest version before approving.");
   assertWritable(project);
-  if (!canManageTask(ctx, task) || !project) throw forbidden("You can't reassign this task");
+  if (!hasPermission(user.role, "task:manage") || !roles(ctx, task).reassign || !project) throw forbidden("Only the task creator, project manager or department leaders can assign this task");
   if (CLOSED_TASK_STATUSES.includes(task.status as TaskStatus)) throw unprocessable("Reopen the task before reassigning it");
+  const managesProject = canManageProject(ctx, task.project);
+  if (!managesProject && !taskCreationDepartments(ctx, project).includes(input.department)) throw forbidden("You can only assign work within your department on this project");
+  const pending = workApprovalPending(task);
+  const requestApproval = !managesProject && (pending || input.requestProjectApproval);
+  const approvesRequest = managesProject && pending;
+  if (approvesRequest && !ctx.isAdmin && s(task.workApproval?.requestedBy) === user.id) throw forbidden("Another Project Manager must approve your request");
+  if (requestApproval && !["BACKLOG", "TODO"].includes(task.status)) throw unprocessable("Request approval before work starts");
+  if (requestApproval && task.description.trim().length < 3) throw unprocessable("Add a work description before requesting approval");
+  if (input.owner === s(task.owner) && input.department === s(task.department) && !requestApproval && !approvesRequest) return;
   if (!project.departments.some((d) => d.toString() === input.department)) {
-    throw unprocessable("This department is not participating in the project", { department: "Not a project department" });
+    const dept = await Department.findById(input.department).select("name status").lean();
+    if (!dept) throw unprocessable("Department not found", { department: "Department not found" });
+    if (dept.status !== "ACTIVE") throw unprocessable(`${dept.name} is not active`, { department: "Department is not active" });
+    await Project.updateOne({ _id: project._id }, { $addToSet: { departments: oid(input.department) } });
   }
-  if (!taskCreationDepartments(ctx, project).includes(input.department)) throw forbidden("You can't assign tasks in this department");
-  if (input.owner === s(task.owner) && input.department === s(task.department)) return;
 
-  const newOwner = await assertProjectMember(project._id, input.owner, input.department, "Owner");
+  const newOwner = await resolveOwner(project._id, input.owner, input.department, user.id);
   const previousOwner = task.owner ? await User.findById(task.owner).select("name").lean() : null;
 
-  await Task.updateOne(
-    { _id: task._id },
+  const result = await Task.updateOne(
+    { _id: task._id, updatedAt: task.updatedAt },
     {
-      $set: { owner: newOwner._id, department: oid(input.department), assignedBy: oid(user.id) },
+      $set: {
+        owner: newOwner._id, department: oid(input.department), assignedBy: requestApproval ? null : oid(user.id),
+        ...(requestApproval ? { workApproval: { status: "PENDING", requestedBy: oid(user.id), requestedAt: new Date(), reviewedBy: null, reviewedAt: null, comment: "" } } : {}),
+        ...(approvesRequest ? { "workApproval.status": "APPROVED", "workApproval.reviewedBy": oid(user.id), "workApproval.reviewedAt": new Date(), "workApproval.comment": "" } : {}),
+      },
       $pull: { collaborators: newOwner._id },
     }
   );
+  if (!result.modifiedCount) throw conflict("This task changed. Refresh it and try again.");
+  await stopTimer(task, user.id, "AUTO", "Task reassigned");
+  if (requestApproval) {
+    await activity(task, user.id, "WORK_APPROVAL_REQUESTED", `Requested Project Manager approval to assign ${newOwner.name}`);
+    await notifyWorkRequest(task, user.id);
+    return;
+  }
+  if (approvesRequest) {
+    await activity(task, user.id, "WORK_APPROVED", `Work approved and assigned to ${newOwner.name}`);
+    await notify({ recipients: [task.workApproval?.requestedBy, task.createdBy, ...(task.collaborators ?? [])], actorId: user.id, type: "REVIEW", title: "Project work request approved",
+      message: `${task.taskNumber} · ${task.title}`, link: `/tasks/${task._id}`, entityType: "Task", entityId: task._id });
+  }
   await activity(task, user.id, "ASSIGNED", `Reassigned from ${previousOwner?.name ?? "nobody"} to ${newOwner.name}`, previousOwner?.name ?? null, newOwner.name);
   await notify({
     recipients: [newOwner._id],
@@ -630,6 +801,41 @@ export async function assignTask(user: CurrentUser, id: string, input: z.output<
   }
 }
 
+/** Review of the proposed work and assignment before execution, separate from completion review. */
+export async function workApprovalAction(user: CurrentUser, id: string, input: z.output<typeof workApprovalSchema>): Promise<void> {
+  const { ctx, task, project } = await loadTaskForUser(user, id);
+  assertWritable(project);
+  if (!project || !hasPermission(user.role, "task:manage")) throw forbidden();
+  const manager = canManageProject(ctx, task.project);
+  if (input.action === "REQUEST") {
+    if (manager || !roles(ctx, task).reassign) throw forbidden("Only the work requester or department leaders can request approval");
+    if (!["BACKLOG", "TODO"].includes(task.status) || task.timer?.running) throw unprocessable("Request approval before work starts");
+    if (task.workApproval?.status === "PENDING") throw conflict("This request is already awaiting Project Manager approval");
+    if (task.description.trim().length < 3) throw unprocessable("Add a work description before requesting approval");
+    const result = await Task.updateOne({ _id: task._id, updatedAt: task.updatedAt }, { $set: {
+      assignedBy: null, workApproval: { status: "PENDING", requestedBy: oid(user.id), requestedAt: new Date(), reviewedBy: null, reviewedAt: null, comment: input.comment },
+    } });
+    if (!result.modifiedCount) throw conflict("This task changed. Refresh it and try again.");
+    await activity(task, user.id, "WORK_APPROVAL_REQUESTED", "Requested Project Manager approval before work starts");
+    await notifyWorkRequest(task, user.id);
+    return;
+  }
+  if (!manager || (!ctx.isAdmin && s(task.workApproval?.requestedBy) === user.id)) throw forbidden("Only another manager of this project can review this work request");
+  if (task.workApproval?.status !== "PENDING") throw conflict("This work request is no longer pending");
+  if (input.action === "APPROVE") {
+    if (!task.owner) throw unprocessable("Choose an assignee to approve and assign this request");
+    await assignTask(user, id, { department: s(task.department), owner: s(task.owner), requestProjectApproval: false }, task.updatedAt);
+    return;
+  }
+  const result = await Task.updateOne({ _id: task._id, updatedAt: task.updatedAt, "workApproval.status": "PENDING" }, { $set: {
+    "workApproval.status": "CHANGES_REQUESTED", "workApproval.reviewedBy": oid(user.id), "workApproval.reviewedAt": new Date(), "workApproval.comment": input.comment,
+  } });
+  if (!result.modifiedCount) throw conflict("This task changed. Refresh it and try again.");
+  await activity(task, user.id, "WORK_CHANGES_REQUESTED", `Requested changes to work description: ${input.comment.slice(0, 400)}`);
+  await notify({ recipients: [task.workApproval?.requestedBy, task.createdBy], actorId: user.id, type: "REVIEW", title: "Changes requested to project work",
+    message: `${task.taskNumber} · ${input.comment.slice(0, 160)}`, link: `/tasks/${task._id}`, entityType: "Task", entityId: task._id });
+}
+
 /* ------------------------------------------------------------------ */
 /* Workflow                                                            */
 /* ------------------------------------------------------------------ */
@@ -640,6 +846,7 @@ export async function changeTaskStatus(user: CurrentUser, id: string, status: Ta
   const r = roles(ctx, task);
   const from = task.status as TaskStatus;
   if (from === status) return;
+  assertWorkApproved(task);
 
   const allowed = allowedTransitions(workflowContext(task, r));
   if (!allowed.includes(status)) {
@@ -665,6 +872,7 @@ export async function changeTaskStatus(user: CurrentUser, id: string, status: Ta
   if (status === "COMPLETED") set.completedAt = new Date();
   if (from === "COMPLETED") Object.assign(set, { completedAt: null, approvedBy: null, approvedAt: null });
   await Task.updateOne({ _id: task._id }, { $set: set });
+  if (status !== "IN_PROGRESS") await stopTimer(task, user.id, "AUTO", `Task moved to ${humanize(status)}`);
 
   const action: ActivityAction = status === "IN_REVIEW" ? "SUBMITTED_FOR_REVIEW" : from === "COMPLETED" || from === "CANCELLED" ? "REOPENED" : "STATUS_CHANGED";
   await activity(task, user.id, action, `${humanize(from)} → ${humanize(status)}${note ? `: ${note}` : ""}`, from, status);
@@ -699,6 +907,7 @@ export async function changeTaskStatus(user: CurrentUser, id: string, status: Ta
 export async function reviewTask(user: CurrentUser, id: string, decision: "APPROVE" | "REQUEST_CHANGES", comment: string): Promise<void> {
   const { ctx, task, project } = await loadTaskForUser(user, id);
   assertWritable(project);
+  assertWorkApproved(task);
   const r = roles(ctx, task);
   if (task.status !== "IN_REVIEW") throw unprocessable("Only tasks in review can be approved or sent back");
   if (!reviewAvailable(workflowContext(task, r))) {
@@ -716,6 +925,7 @@ export async function reviewTask(user: CurrentUser, id: string, decision: "APPRO
     ]);
     if (openSubs) throw unprocessable(`Can't approve: ${openSubs} subtask(s) are still open.`);
     if (openDeps.length) throw unprocessable(`Can't approve: waiting on ${openDeps.map((d) => d.taskNumber).join(", ")}.`);
+    await stopTimer(task, user.id, "AUTO", "Task completed");
     const now = new Date();
     await Task.updateOne(
       { _id: task._id },
@@ -734,6 +944,7 @@ export async function reviewTask(user: CurrentUser, id: string, decision: "APPRO
       entityId: task._id,
     });
   } else {
+    await stopTimer(task, user.id, "AUTO", "Changes requested");
     await Task.updateOne({ _id: task._id }, { $set: { status: "CHANGES_REQUESTED" } });
     await TaskComment.create({ task: task._id, author: oid(user.id), body: comment, kind: "REVIEW" });
     await activity(task, user.id, "CHANGES_REQUESTED", `Requested changes: ${comment}`, "IN_REVIEW", "CHANGES_REQUESTED");
@@ -783,6 +994,72 @@ export async function setBlocker(user: CurrentUser, id: string, action: "REPORT"
 }
 
 /* ------------------------------------------------------------------ */
+/* Work timer                                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Closes the running timer session (if any). Atomic and idempotent: the update only
+ * matches while the same session is still running, so concurrent calls can't double-count.
+ */
+async function stopTimer(task: any, actorId: string, kind: "PAUSED" | "AUTO", reason = ""): Promise<boolean> {
+  const startedAt: Date | undefined = task.timer?.startedAt;
+  if (!task.timer?.running || !startedAt) return false;
+  const endedAt = new Date();
+  const seconds = Math.max(0, Math.round((endedAt.getTime() - new Date(startedAt).getTime()) / 1000));
+  const total = (task.timer.totalSeconds ?? 0) + seconds;
+  const res = await Task.updateOne(
+    { _id: task._id, "timer.running": true, "timer.startedAt": startedAt },
+    {
+      $set: {
+        "timer.running": false,
+        "timer.startedAt": null,
+        "timer.by": null,
+        "timer.totalSeconds": total,
+        actualHours: Math.round((total / 3600) * 100) / 100,
+      },
+      $push: {
+        timeLog: { user: task.timer.by ?? oid(actorId), startedAt, endedAt, seconds, pauseReason: reason, endKind: kind },
+      },
+    }
+  );
+  if (!res.modifiedCount) return false;
+  task.timer.running = false;
+  task.timer.totalSeconds = total;
+  return true;
+}
+
+export async function setTimer(user: CurrentUser, id: string, action: "START" | "PAUSE", reason: string): Promise<void> {
+  const { ctx, task, project } = await loadTaskForUser(user, id);
+  assertWritable(project);
+  const r = roles(ctx, task);
+  if (!r.owner) throw forbidden("Only the task owner can track time on this task");
+
+  if (action === "PAUSE") {
+    if (!task.timer?.running) return;
+    const stopped = await stopTimer(task, user.id, "PAUSED", reason);
+    if (stopped) await activity(task, user.id, "TIMER_PAUSED", reason ? `Paused work: ${reason}` : "Paused work");
+    return;
+  }
+
+  assertWorkApproved(task);
+  if (task.timer?.running) return;
+  if (!["BACKLOG", "TODO", "ON_HOLD", "IN_PROGRESS", "CHANGES_REQUESTED"].includes(task.status)) {
+    throw unprocessable("Time can't be tracked on a task that is in review or closed.");
+  }
+  const other = await Task.findOne({ "timer.running": true, "timer.by": oid(user.id), _id: { $ne: task._id } }).select("taskNumber").lean();
+  if (other) throw unprocessable(`Pause ${other.taskNumber} first. Only one timer can run at a time.`);
+
+  // Starting work moves the task to In Progress (runs the normal dependency / permission checks).
+  if (task.status !== "IN_PROGRESS") await changeTaskStatus(user, id, "IN_PROGRESS", "");
+
+  const res = await Task.updateOne(
+    { _id: task._id, "timer.running": { $ne: true } },
+    { $set: { "timer.running": true, "timer.startedAt": new Date(), "timer.by": oid(user.id) } }
+  );
+  if (res.modifiedCount) await activity(task, user.id, "TIMER_STARTED", "Started working");
+}
+
+/* ------------------------------------------------------------------ */
 /* Comments & checklist                                                */
 /* ------------------------------------------------------------------ */
 
@@ -806,6 +1083,7 @@ export async function addComment(user: CurrentUser, id: string, body: string): P
 async function loadForChecklist(user: CurrentUser, id: string) {
   const { ctx, task, project } = await loadTaskForUser(user, id);
   assertWritable(project);
+  assertWorkApproved(task);
   const r = roles(ctx, task);
   if (!(r.manage || r.owner || r.collaborator)) throw forbidden("Only people working on this task can update its checklist");
   return task;

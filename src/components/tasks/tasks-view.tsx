@@ -2,7 +2,7 @@
 
 import { day } from "@/lib/dates";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import useSWR from "swr";
 import {
@@ -30,8 +30,10 @@ import {
   ListChecks,
   Plus,
   Search,
+  UserRoundCog,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ReassignDialog } from "./task-dialogs";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -52,6 +54,7 @@ import { cn } from "@/lib/utils";
 import type { Paginated, TaskListItemDTO } from "@/types/dto";
 import { TaskFormDialog } from "./task-form-dialog";
 import { changeStatus, TaskStatusMenu } from "./task-status";
+import { TaskTimerChip } from "./task-timer";
 
 const ALL = "__all";
 type View = "list" | "board" | "calendar";
@@ -69,6 +72,8 @@ function DueLabel({ t }: { t: TaskListItemDTO }) {
 function TaskMeta({ t }: { t: TaskListItemDTO }) {
   return (
     <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+      {t.workApprovalStatus === "PENDING" ? <span className="font-medium text-violet-700">Pending PM approval</span> : null}
+      {t.workApprovalStatus === "CHANGES_REQUESTED" ? <span className="font-medium text-orange-700">Work request needs changes</span> : null}
       {t.isBlocked ? <span className="inline-flex items-center gap-0.5 font-medium text-red-600"><AlertOctagon className="size-3" /> Blocked</span> : null}
       {t.checklist.total ? <span className="inline-flex items-center gap-0.5"><ListChecks className="size-3" /> {t.checklist.done}/{t.checklist.total}</span> : null}
       {t.subtaskCount ? <span className="inline-flex items-center gap-0.5"><GitBranch className="size-3" /> {t.subtaskCount}</span> : null}
@@ -80,7 +85,9 @@ function TaskMeta({ t }: { t: TaskListItemDTO }) {
 
 function ListView({ items, scope, onChanged }: { items: TaskListItemDTO[]; scope: "mine" | "all"; onChanged: () => void }) {
   const router = useRouter();
+  const [reassigning, setReassigning] = useState<TaskListItemDTO | null>(null);
   return (
+    <>
     <Table>
       <TableHeader>
         <TableRow className="bg-muted/40 hover:bg-muted/40">
@@ -90,7 +97,9 @@ function ListView({ items, scope, onChanged }: { items: TaskListItemDTO[]; scope
           <TableHead className="hidden md:table-cell">{scope === "mine" ? "Assigned by" : "Owner"}</TableHead>
           <TableHead className="hidden sm:table-cell">Priority</TableHead>
           <TableHead>Due</TableHead>
-          <TableHead className="pr-4">Status</TableHead>
+          <TableHead>Time</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead className="w-10 pr-4"><span className="sr-only">Actions</span></TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -119,14 +128,24 @@ function ListView({ items, scope, onChanged }: { items: TaskListItemDTO[]; scope
               </TableCell>
               <TableCell className="hidden sm:table-cell"><PriorityBadge priority={t.priority} /></TableCell>
               <TableCell className="text-sm"><DueLabel t={t} /></TableCell>
+              <TableCell><TaskTimerChip task={t} onChanged={onChanged} /></TableCell>
+              <TableCell onClick={(e) => e.stopPropagation()}>
+                <TaskStatusMenu taskId={t.id} status={t.status} allowed={t.allowedStatuses} timer={t.liveTimer} onChanged={onChanged} />
+              </TableCell>
               <TableCell className="pr-4" onClick={(e) => e.stopPropagation()}>
-                <TaskStatusMenu taskId={t.id} status={t.status} allowed={t.allowedStatuses} onChanged={onChanged} />
+                {t.canReassign ? (
+                  <Button variant="ghost" size="icon-sm" aria-label={`Reassign ${t.taskNumber}`} title="Reassign" onClick={() => setReassigning(t)}>
+                    <UserRoundCog />
+                  </Button>
+                ) : null}
               </TableCell>
             </TableRow>
           );
         })}
       </TableBody>
     </Table>
+    {reassigning ? <ReassignDialog task={reassigning} open onOpenChange={(o) => !o && setReassigning(null)} onDone={onChanged} /> : null}
+    </>
   );
 }
 
@@ -289,6 +308,8 @@ export function TasksView({
   canCreateInProject?: boolean;
 }) {
   const canManage = useCan("task:manage");
+  const searchParams = useSearchParams();
+  const [workQueue, setWorkQueue] = useState(() => ["pending", "unassigned"].includes(searchParams.get("workQueue") ?? "") ? searchParams.get("workQueue")! : "");
   const [view, setView] = useState<View>("list");
   const [q, setQ] = useState("");
   const [project, setProject] = useState(projectId ?? "");
@@ -306,6 +327,7 @@ export function TasksView({
   const statusParam = status === "open" ? TASK_STATUSES.filter((s) => s !== "COMPLETED" && s !== "CANCELLED").join(",") : status;
   const params = {
     scope,
+    workQueue,
     q: search,
     project,
     department,
@@ -327,11 +349,11 @@ export function TasksView({
   const { data, error, isLoading, mutate } = useSWR<Paginated<TaskListItemDTO>>(`/api/tasks${qs(params)}`, fetcher, { keepPreviousData: true });
   const { data: projects } = useProjectOptions(!projectId);
   const { data: departments } = useDepartmentOptions();
-  const canCreate = projectId ? !!canCreateInProject : canManage && !!projects?.some((p) => p.taskDepartments.length);
+  const canCreate = projectId ? !!canCreateInProject : canManage && !!projects?.some((p) => p.canRequestTasks);
 
-  const filtersActive = !!(q || (!projectId && project) || department || status || priority || due);
+  const filtersActive = !!(q || (!projectId && project) || department || status || priority || due || workQueue);
   const reset = () => {
-    setQ(""); if (!projectId) setProject(""); setDepartment(""); setStatus(""); setPriority(""); setDue(""); setPage(1);
+    setQ(""); if (!projectId) setProject(""); setDepartment(""); setStatus(""); setPriority(""); setDue(""); setWorkQueue(""); setPage(1);
   };
   const set = (fn: (v: string) => void) => (v: string) => { fn(v === ALL ? "" : v); setPage(1); };
   const items = useMemo(() => data?.items ?? [], [data]);
@@ -365,6 +387,10 @@ export function TasksView({
             </div>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+            {scope === "all" ? <Select value={workQueue || ALL} onValueChange={set(setWorkQueue)}>
+              <SelectTrigger className="w-full sm:w-52" aria-label="Work requests"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value={ALL}>All project work</SelectItem><SelectItem value="pending">Awaiting PM approval</SelectItem><SelectItem value="unassigned">Needs an assignee</SelectItem></SelectContent>
+            </Select> : null}
             {!projectId ? (
               <Select value={project || ALL} onValueChange={set(setProject)}>
                 <SelectTrigger className="w-full sm:w-48" aria-label="Project"><SelectValue /></SelectTrigger>

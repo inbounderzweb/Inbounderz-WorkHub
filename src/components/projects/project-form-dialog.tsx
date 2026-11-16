@@ -30,7 +30,13 @@ type Member = { user: string; department: string; projectRole: "LEAD" | "MEMBER"
 
 const STEPS = ["Details", "Departments & team", "Review"] as const;
 
-function defaults(p?: ProjectDTO & Partial<Pick<ProjectDetailDTO, "notes">>, managerId?: string): CreateProjectInput {
+function initialMembers(p?: ProjectDTO & Partial<Pick<ProjectDetailDTO, "members">>): Member[] {
+  return (p?.members ?? [])
+    .filter((m) => m.isActive && m.department && m.projectRole !== "MANAGER" && m.user.id !== p?.manager?.id)
+    .map((m) => ({ user: m.user.id, department: m.department!.id, projectRole: m.projectRole as Member["projectRole"] }));
+}
+
+function defaults(p?: ProjectDTO & Partial<Pick<ProjectDetailDTO, "notes" | "members">>, managerId?: string): CreateProjectInput {
   return {
     name: p?.name ?? "",
     client: p?.client ?? "",
@@ -44,7 +50,7 @@ function defaults(p?: ProjectDTO & Partial<Pick<ProjectDetailDTO, "notes">>, man
     budget: p?.budget ?? null,
     approvalMode: p?.approvalMode ?? "DEPARTMENT",
     departments: p?.departments.map((d) => d.id) ?? [],
-    members: [],
+    members: initialMembers(p),
   };
 }
 
@@ -197,10 +203,18 @@ export function ProjectFormDialog({
       const body = { ...values, manager: values.manager || null, startDate: values.startDate || null, endDate: values.endDate || null };
       let saved: ProjectDTO;
       if (isEdit) {
-        const { members: _m, departments: _d, ...rest } = body;
-        void _m;
-        void _d;
+        const { members: nextMembers, ...rest } = body;
         saved = await api<ProjectDTO>(`/api/projects/${project.id}`, { method: "PATCH", body: rest });
+        const before = initialMembers(project);
+        const after = (nextMembers ?? []) as Member[];
+        const keptDepts = new Set(values.departments);
+        const add = after.filter((m) => !before.some((b) => b.user === m.user));
+        // Members of removed departments are ended by the department change itself.
+        const remove = before.filter((b) => keptDepts.has(b.department) && !after.some((m) => m.user === b.user)).map((b) => b.user);
+        const update = after.filter((m) => before.some((b) => b.user === m.user && b.projectRole !== m.projectRole)).map((m) => ({ user: m.user, projectRole: m.projectRole }));
+        if (add.length || remove.length || update.length) {
+          await api(`/api/projects/${project.id}/members`, { method: "POST", body: { add, remove, update } });
+        }
         toast.success("Project updated");
       } else {
         saved = await api<ProjectDTO>("/api/projects", { method: "POST", body });
@@ -364,7 +378,7 @@ export function ProjectFormDialog({
         <DialogHeader>
           <DialogTitle>{isEdit ? `Edit ${project.name}` : "Create project"}</DialogTitle>
           <DialogDescription>
-            {isEdit ? "Update project details. Manage departments and people from the Team tab." : "Set up the project, choose departments and allocate specific employees."}
+            {isEdit ? "Update project details, departments and allocated employees." : "Set up the project, choose departments and allocate specific employees."}
           </DialogDescription>
         </DialogHeader>
         {!isEdit ? (
@@ -381,7 +395,15 @@ export function ProjectFormDialog({
           </ol>
         ) : null}
         <form id="project-form" onSubmit={handleSubmit(onSubmit)} noValidate>
-          {isEdit ? details : step === 0 ? details : step === 1 ? team : review}
+          {isEdit ? (
+            <div className="space-y-6">
+              {details}
+              <div className="border-t pt-5">
+                <h3 className="mb-3 text-sm font-semibold">Departments &amp; team</h3>
+                {team}
+              </div>
+            </div>
+          ) : step === 0 ? details : step === 1 ? team : review}
         </form>
         <DialogFooter>
           {!isEdit && step > 0 ? (

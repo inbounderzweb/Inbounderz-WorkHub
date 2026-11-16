@@ -15,6 +15,7 @@ const departmentFields = {
   description: z.string().trim().max(1000),
   head: optionalObjectId,
   teamLeaders: z.array(objectId).max(50),
+  projectManagers: z.array(objectId).max(20),
   status: z.enum(DEPARTMENT_STATUSES),
   color: z.string().regex(/^#[0-9a-f]{6}$/i, "Invalid color"),
 };
@@ -23,6 +24,7 @@ export const departmentBaseSchema = z.object({
   ...departmentFields,
   description: departmentFields.description.optional().default(""),
   teamLeaders: departmentFields.teamLeaders.optional().default([]),
+  projectManagers: departmentFields.projectManagers.optional().default([]),
   status: departmentFields.status.default("ACTIVE"),
   color: departmentFields.color.optional().default("#16a34a"),
 });
@@ -43,6 +45,11 @@ export const departmentListQuerySchema = z.object({
   q: z.string().trim().max(100).optional().default(""),
   status: z.union([z.literal(""), z.enum(DEPARTMENT_STATUSES)]).optional().default(""),
   all: z
+    .union([z.literal("1"), z.literal("true"), z.literal("")])
+    .optional()
+    .transform((v) => v === "1" || v === "true"),
+  /** Task form picker: every active department, regardless of which ones the viewer belongs to. */
+  forTasks: z
     .union([z.literal("1"), z.literal("true"), z.literal("")])
     .optional()
     .transform((v) => v === "1" || v === "true"),

@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { humanize, type RoleKey, type TaskPriority, type TaskStatus, type UserStatus, type ProjectStatus } from "@/lib/constants";
+import { humanize, type RoleKey, type TaskPriority, type TaskStatus, type TicketStatus, type UserStatus, type ProjectStatus } from "@/lib/constants";
 
 const base = "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap";
 
@@ -92,4 +92,24 @@ export function DepartmentChip({ name, color, className }: { name: string; color
       <span className="truncate">{name}</span>
     </span>
   );
+}
+
+const TICKET_STATUS_STYLES: Record<TicketStatus, string> = {
+  DRAFT: "border-slate-200 bg-white text-slate-500 border-dashed",
+  PENDING_APPROVAL: "border-amber-200 bg-amber-50 text-amber-800",
+  UNDER_REVIEW: "border-violet-200 bg-violet-50 text-violet-700",
+  PENDING_CLARIFICATION: "border-orange-200 bg-orange-50 text-orange-700",
+  APPROVED: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  UNASSIGNED: "border-rose-200 bg-rose-50 text-rose-700",
+  ASSIGNED: "border-sky-200 bg-sky-50 text-sky-700",
+  IN_PROGRESS: "border-blue-200 bg-blue-50 text-blue-700",
+  ON_HOLD: "border-amber-200 bg-amber-50 text-amber-700",
+  SUBMITTED_FOR_REVIEW: "border-violet-200 bg-violet-50 text-violet-700",
+  COMPLETED: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  REJECTED: "border-red-200 bg-red-50 text-red-700",
+  CANCELLED: "border-slate-200 bg-slate-100 text-slate-500",
+};
+
+export function TicketStatusBadge({ status }: { status: TicketStatus }) {
+  return <span className={cn(base, TICKET_STATUS_STYLES[status])}>{humanize(status)}</span>;
 }

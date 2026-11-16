@@ -68,6 +68,7 @@ function toDepartmentDTO(d: any, counts: Counts): DepartmentDTO {
     status: d.status as DepartmentStatus,
     head: toUserRef(d.head),
     teamLeaders: (d.teamLeaders ?? []).map(toUserRef).filter(Boolean),
+    projectManagers: (d.projectManagers ?? []).map(toUserRef).filter(Boolean),
     employeeCount: counts.employees.get(id) ?? 0,
     activeProjects: counts.projects.get(id) ?? 0,
     openTasks: counts.tasks.get(id) ?? 0,
@@ -128,14 +129,17 @@ export async function listDepartments(
   query: ListQuery
 ): Promise<Paginated<DepartmentDTO> | DepartmentOptionDTO[]> {
   if (!hasPermission(actor.role, "department:read")) throw forbidden();
-  const visible = await visibleDepartmentIds(actor);
+  // Task and ticket creators may direct work to any active department, so the picker isn't scoped to their own.
+  const forTasks = query.all && query.forTasks && (hasPermission(actor.role, "task:manage") || hasPermission(actor.role, "ticket:create"));
+  const visible = forTasks ? null : await visibleDepartmentIds(actor);
   const and: Filter[] = [];
   if (visible) and.push({ _id: { $in: visible } });
   if (query.q) {
     const rx = new RegExp(escapeRegex(query.q), "i");
     and.push({ $or: [{ name: rx }, { code: rx }, { description: rx }] });
   }
-  if (query.status) and.push({ status: query.status });
+  if (forTasks) and.push({ status: "ACTIVE" });
+  else if (query.status) and.push({ status: query.status });
   const filter = and.length ? { $and: and } : {};
 
   if (query.all) {
@@ -156,7 +160,7 @@ export async function listDepartments(
       .skip((query.page - 1) * query.pageSize)
       .limit(query.pageSize)
       .populate("head", USER_REF_FIELDS)
-      .populate("teamLeaders", USER_REF_FIELDS)
+      .populate("teamLeaders", USER_REF_FIELDS).populate("projectManagers", USER_REF_FIELDS)
       .lean(),
     Department.countDocuments(filter),
   ]);
@@ -181,7 +185,7 @@ export async function getDepartment(actor: CurrentUser, id: string): Promise<Dep
   await assertVisible(actor, id);
   const dept = await Department.findById(id)
     .populate("head", USER_REF_FIELDS)
-    .populate("teamLeaders", USER_REF_FIELDS)
+    .populate("teamLeaders", USER_REF_FIELDS).populate("projectManagers", USER_REF_FIELDS)
     .lean();
   if (!dept) throw notFound("Department not found");
 
@@ -246,6 +250,20 @@ async function assertUniqueNameCode(name: string | undefined, code: string | und
   if (Object.keys(fieldErrors).length) throw conflict(Object.values(fieldErrors)[0], fieldErrors);
 }
 
+/** Project Managers must be active users holding the Project Manager role. */
+async function validPms(ids: string[] | undefined) {
+  const unique = [...new Set(ids ?? [])];
+  if (!unique.length) return [];
+  const role = await getRoleByKey("PROJECT_MANAGER");
+  const users = await User.find({ _id: { $in: unique.map(oid) } }).select("name role status").lean();
+  if (users.length !== unique.length) throw unprocessable("One or more project managers were not found", { projectManagers: "User not found" });
+  for (const u of users) {
+    if (u.status !== "ACTIVE") throw unprocessable(`${u.name} is inactive`, { projectManagers: `${u.name} is inactive` });
+    if (!role || u.role.toString() !== role.id) throw unprocessable(`${u.name} is not a Project Manager`, { projectManagers: `${u.name} does not have the Project Manager role` });
+  }
+  return unique.map(oid);
+}
+
 export async function createDepartment(actor: CurrentUser, input: CreateInput): Promise<DepartmentDTO> {
   if (!hasPermission(actor.role, "department:create")) throw forbidden();
   await assertUniqueNameCode(input.name, input.code);
@@ -260,6 +278,7 @@ export async function createDepartment(actor: CurrentUser, input: CreateInput): 
     status: input.status,
     head: input.head ? oid(input.head) : null,
     teamLeaders,
+    projectManagers: await validPms(input.projectManagers),
     createdBy: oid(actor.id),
   });
 
@@ -296,7 +315,7 @@ export async function createDepartment(actor: CurrentUser, input: CreateInput): 
     entityId: dept._id,
   });
 
-  const fresh = await Department.findById(dept._id).populate("head", USER_REF_FIELDS).populate("teamLeaders", USER_REF_FIELDS).lean();
+  const fresh = await Department.findById(dept._id).populate("head", USER_REF_FIELDS).populate("teamLeaders", USER_REF_FIELDS).populate("projectManagers", USER_REF_FIELDS).lean();
   return toDepartmentDTO(fresh, await countsFor([dept._id]));
 }
 
@@ -333,6 +352,13 @@ export async function updateDepartment(actor: CurrentUser, id: string, input: Up
     update.teamLeaders = newLeaders.map(oid);
   }
 
+  if (input.projectManagers !== undefined) {
+    if (!can.assignHead) throw forbidden("Only a Super Admin can assign project managers");
+    const next = await validPms(input.projectManagers);
+    const cur = (dept.projectManagers ?? []).map((x) => x.toString()).sort();
+    if (JSON.stringify(cur) !== JSON.stringify(next.map(String).sort())) update.projectManagers = next;
+  }
+
   if (update.status === "ARCHIVED") {
     const openProjects = await Project.countDocuments({ departments: dept._id, status: { $in: OPEN_PROJECT_STATUSES } });
     if (openProjects) throw conflict(`Cannot archive: ${openProjects} active project(s) still include this department`);
@@ -347,7 +373,7 @@ export async function updateDepartment(actor: CurrentUser, id: string, input: Up
   );
 
   if (!Object.keys(update).length) {
-    const same = await Department.findById(id).populate("head", USER_REF_FIELDS).populate("teamLeaders", USER_REF_FIELDS).lean();
+    const same = await Department.findById(id).populate("head", USER_REF_FIELDS).populate("teamLeaders", USER_REF_FIELDS).populate("projectManagers", USER_REF_FIELDS).lean();
     return toDepartmentDTO(same, await countsFor([dept._id]));
   }
 
@@ -358,7 +384,7 @@ export async function updateDepartment(actor: CurrentUser, id: string, input: Up
     await User.updateMany({ _id: { $in: newLeaders.map(oid) }, department: null }, { $set: { department: dept._id } });
   }
 
-  const changes = diffFields(before, update, [...generalFields, "head", "teamLeaders"]);
+  const changes = diffFields(before, update, [...generalFields, "head", "teamLeaders", "projectManagers"]);
   await recordAudit({
     actorId: actor.id,
     action: update.head !== undefined ? "department.assign_head" : leadersChanged ? "department.assign_leaders" : "department.update",
@@ -395,7 +421,7 @@ export async function updateDepartment(actor: CurrentUser, id: string, input: Up
     });
   }
 
-  const fresh = await Department.findById(id).populate("head", USER_REF_FIELDS).populate("teamLeaders", USER_REF_FIELDS).lean();
+  const fresh = await Department.findById(id).populate("head", USER_REF_FIELDS).populate("teamLeaders", USER_REF_FIELDS).populate("projectManagers", USER_REF_FIELDS).lean();
   return toDepartmentDTO(fresh, await countsFor([dept._id]));
 }
 

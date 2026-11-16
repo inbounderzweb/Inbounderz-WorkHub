@@ -4,7 +4,8 @@ import type { CurrentUser } from "@/lib/auth/current-user";
 import { ApiError, badRequest, forbidden, notFound, unprocessable } from "@/lib/api";
 import { recordAudit } from "@/lib/audit";
 import { ALLOWED_MIME_TYPES, MAX_UPLOAD_BYTES, sanitizeFileName, storage } from "@/lib/storage";
-import { Attachment, Project, Task, TaskActivity } from "@/models";
+import { Attachment, Project, Task, TaskActivity, Ticket, TicketActivity } from "@/models";
+import { ticketCan, ticketRights } from "./ticket-access";
 import type { AttachmentDTO } from "@/types/dto";
 import {
   accessContext,
@@ -21,7 +22,7 @@ import { oid } from "./scope";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-type EntityType = "Task" | "Project";
+type EntityType = "Task" | "Project" | "Ticket";
 
 function toAttachmentDTO(a: any, userId: string, canManage: boolean): AttachmentDTO {
   return {
@@ -58,13 +59,21 @@ async function entityAccess(ctx: AccessContext, entityType: string, entityId: Ty
       upload: !project?.isArchived && (manage || isOwner(ctx, task) || isCollaborator(ctx, task)),
       manage,
       task,
+      ticket: null,
     };
+  }
+  if (entityType === "Ticket") {
+    const ticket = await Ticket.findById(entityId).select("status createdBy assignee targetDepartment additionalDepartments requestingDepartment projectManager assignedReviewer ticketNumber").lean();
+    if (!ticket) return null;
+    const rights = await ticketRights(ctx.user, ticket);
+    if (!rights.view) return null;
+    return { view: true, upload: ticketCan(rights, ticket).upload, manage: rights.triager, task: null, ticket };
   }
   if (entityType === "Project") {
     const project = await Project.findById(entityId).select("departments isArchived").lean();
     if (!project || !canViewProject(ctx, project)) return null;
     const manage = canManageProject(ctx, project._id);
-    return { view: true, upload: manage && !project.isArchived, manage, task: null };
+    return { view: true, upload: manage && !project.isArchived, manage, task: null, ticket: null };
   }
   return null;
 }
@@ -111,6 +120,8 @@ export async function uploadAttachment(
       to: fileName,
       message: `Attached ${fileName}`,
     });
+  } else if (access.ticket) {
+    await TicketActivity.create({ ticket: access.ticket._id, actor: oid(user.id), action: "ATTACHMENT_ADDED", to: fileName, message: `Attached ${fileName}` });
   } else {
     await recordAudit({
       actorId: user.id,
@@ -150,6 +161,8 @@ export async function deleteAttachment(user: CurrentUser, id: string): Promise<v
       action: "UPDATED",
       message: `Removed attachment ${a.fileName}`,
     });
+  } else if (access.ticket) {
+    await TicketActivity.create({ ticket: access.ticket._id, actor: oid(user.id), action: "UPDATED", message: `Removed attachment ${a.fileName}` });
   }
 }
 

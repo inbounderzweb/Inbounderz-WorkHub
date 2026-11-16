@@ -226,6 +226,8 @@ export async function listProjects(
         p.isArchived || ["COMPLETED", "CANCELLED"].includes(p.status) || !hasPermission(user.role, "task:manage")
           ? []
           : taskCreationDepartments(ctx, { _id: p._id, departments: (p.departments as any[]).map((d) => d._id) }),
+      canRequestTasks: !p.isArchived && !["COMPLETED", "CANCELLED"].includes(p.status) && hasPermission(user.role, "task:manage") && (p.departments as any[]).length > 0,
+      canAddDepartments: !p.isArchived && !["COMPLETED", "CANCELLED"].includes(p.status) && hasPermission(user.role, "task:manage") && canManageProject(ctx, p._id),
     }));
   }
 
@@ -340,19 +342,21 @@ export async function getProject(user: CurrentUser, id: string): Promise<Project
       edit: writable,
       manageTeam: writable,
       archive: manage,
-      createTask: taskDepartments.length > 0,
+      createTask:
+        taskDepartments.length > 0 ||
+        (!project.isArchived && !["COMPLETED", "CANCELLED"].includes(project.status) && hasPermission(user.role, "task:manage") && project.departments.length > 0),
       taskDepartments,
     },
   };
 }
 
 /** Active team members of a project, optionally limited to one department. */
-export async function getProjectTeam(user: CurrentUser, id: string, department?: string): Promise<TeamMemberOptionDTO[]> {
+export async function getProjectTeam(user: CurrentUser, id: string, department?: string, includeDepartmentStaff = false): Promise<TeamMemberOptionDTO[]> {
   const { project } = await loadVisibleProject(user, id);
   const filter: Filter = { project: project._id, isActive: true };
   if (department) filter.department = oid(department);
   const rows = await ProjectMember.find(filter).populate("user", "name email employeeId designation status department").lean();
-  return rows
+  const team = rows
     .filter((m: any) => m.user && m.user.status === "ACTIVE")
     .map((m: any) => ({
       id: m.user._id.toString(),
@@ -362,13 +366,62 @@ export async function getProjectTeam(user: CurrentUser, id: string, department?:
       designation: m.user.designation ?? "",
       departmentId: m.department ? m.department.toString() : null,
       projectRole: m.projectRole as ProjectMemberRole,
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    }));
+
+  // Assignable staff: the department's own active employees and its head, even if not on the project yet.
+  if (department && includeDepartmentStaff && hasPermission(user.role, "task:manage")) {
+    const dept = await Department.findById(department).select("head").lean();
+    const staff = await User.find({
+      status: "ACTIVE",
+      $or: [{ department: oid(department) }, ...(dept?.head ? [{ _id: dept.head }] : [])],
+    })
+      .select("name email employeeId designation")
+      .limit(300)
+      .lean();
+    const have = new Set(team.map((t) => t.id));
+    for (const u of staff as any[]) {
+      if (have.has(u._id.toString())) continue;
+      team.push({
+        id: u._id.toString(),
+        name: u.name,
+        email: u.email,
+        employeeId: u.employeeId,
+        designation: u.designation ?? "",
+        departmentId: department,
+        projectRole: "MEMBER" as ProjectMemberRole,
+      });
+    }
+  }
+  return team.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /* ------------------------------------------------------------------ */
 /* Mutations                                                           */
 /* ------------------------------------------------------------------ */
+
+/**
+ * A department added to a project is told through its Head, even when no employee was allocated yet,
+ * so the Head can decide who from the department works on it.
+ */
+async function notifyDepartmentHeads(project: { _id: any; name: string; code: string }, departmentIds: string[], actorId: string, skip: string[] = []) {
+  if (!departmentIds.length) return;
+  const departments = await Department.find({ _id: { $in: departmentIds.map(oid) } }).select("name head").lean();
+  const skipSet = new Set([actorId, ...skip]);
+  for (const d of departments) {
+    const head = d.head?.toString();
+    if (!head || skipSet.has(head)) continue;
+    await notify({
+      recipients: [head],
+      actorId,
+      type: "PROJECT",
+      title: "Your department was added to a project",
+      message: `${d.name} is now part of ${project.name} (${project.code}). Allocate or confirm who from your team will work on it.`,
+      link: `/projects/${project._id}`,
+      entityType: "Project",
+      entityId: project._id,
+    });
+  }
+}
 
 export async function createProject(user: CurrentUser, input: CreateInput): Promise<ProjectDTO> {
   if (!hasPermission(user.role, "project:manage")) throw forbidden();
@@ -423,6 +476,7 @@ export async function createProject(user: CurrentUser, input: CreateInput): Prom
     entityType: "Project",
     entityId: project._id,
   });
+  await notifyDepartmentHeads(project, [...new Set(input.departments)], user.id, [managerId.toString(), ...members.map((m) => m.user)]);
   await notify({
     recipients: members.map((m) => m.user),
     actorId: user.id,
@@ -461,11 +515,13 @@ export async function updateProject(user: CurrentUser, id: string, input: Update
 
   // Department changes
   let removedDepts: string[] = [];
+  let addedDepts: string[] = [];
   if (input.departments) {
     const current = project.departments.map((d) => d.toString());
     const next = [...new Set(input.departments)];
     const added = next.filter((d) => !current.includes(d));
     removedDepts = current.filter((d) => !next.includes(d));
+    addedDepts = added;
     if (added.length) await validateAllocation(added, []);
     for (const d of removedDepts) {
       const open = await Task.countDocuments({ project: project._id, department: oid(d), status: { $in: OPEN_TASK_STATUSES } });
@@ -505,6 +561,7 @@ export async function updateProject(user: CurrentUser, id: string, input: Update
     summary: `Updated ${project.name}: ${Object.keys(changes).join(", ")}`,
     changes,
   });
+  await notifyDepartmentHeads(project, addedDepts, user.id, [project.manager.toString()]);
   if (update.manager) {
     await notify({
       recipients: [update.manager as Types.ObjectId],

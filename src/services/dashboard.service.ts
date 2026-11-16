@@ -72,10 +72,13 @@ export type ManagerDashboard = {
     managedProjects: number;
     pendingTasks: number;
     awaitingReview: number;
+    pendingWorkRequests: number;
     upcomingDeadlines: number;
     overdueTasks: number;
   };
   projects: ProjectProgress[];
+  workRequests: TaskSummaryDTO[];
+  unassignedWork: TaskSummaryDTO[];
   reviewQueue: TaskSummaryDTO[];
   deadlines: TaskSummaryDTO[];
   tasksByStatus: StatusCount[];
@@ -260,7 +263,7 @@ async function managerDashboard(user: CurrentUser): Promise<ManagerDashboard> {
   const inProjects = { project: { $in: projectIds } };
   const reviewScope = inProjects;
 
-  const [pendingTasks, awaitingReview, upcomingCount, overdueTasks, projects, review, deadlines, statusCounts] =
+  const [pendingTasks, awaitingReview, upcomingCount, overdueTasks, projects, review, deadlines, statusCounts, pendingWorkRequests, workRequests, unassignedWork] =
     await Promise.all([
       Task.countDocuments({ ...inProjects, status: { $in: OPEN_TASK_STATUSES } }),
       Task.countDocuments({ ...reviewScope, status: "IN_REVIEW" }),
@@ -274,12 +277,17 @@ async function managerDashboard(user: CurrentUser): Promise<ManagerDashboard> {
           .limit(8)
       ),
       tasksByStatus(inProjects),
+      Task.countDocuments({ ...inProjects, "workApproval.status": "PENDING", status: { $nin: CLOSED_TASK_STATUSES } }),
+      populateTask(Task.find({ ...inProjects, "workApproval.status": "PENDING", status: { $nin: CLOSED_TASK_STATUSES } }).sort({ updatedAt: -1 }).limit(8)),
+      populateTask(Task.find({ ...inProjects, owner: null, "workApproval.status": { $ne: "PENDING" }, status: { $nin: CLOSED_TASK_STATUSES } }).sort({ createdAt: -1 }).limit(8)),
     ]);
 
   return {
     kind: "manager",
-    stats: { managedProjects: projectIds.length, pendingTasks, awaitingReview, upcomingDeadlines: upcomingCount, overdueTasks },
+    stats: { managedProjects: projectIds.length, pendingTasks, awaitingReview, pendingWorkRequests, upcomingDeadlines: upcomingCount, overdueTasks },
     projects,
+    workRequests: (workRequests as any[]).map(toTaskSummary),
+    unassignedWork: (unassignedWork as any[]).map(toTaskSummary),
     reviewQueue: (review as any[]).map(toTaskSummary),
     deadlines: (deadlines as any[]).map(toTaskSummary),
     tasksByStatus: statusCounts,

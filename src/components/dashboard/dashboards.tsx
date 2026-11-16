@@ -11,7 +11,6 @@ import {
   FolderKanban,
   ListTodo,
   Loader,
-  Ticket,
   Users,
   Bell,
 } from "lucide-react";
@@ -29,18 +28,10 @@ import type {
 import { cn } from "@/lib/utils";
 import { Panel } from "./panel";
 import { ActivityFeed } from "./activity-feed";
+import { TicketsPanel } from "./tickets-panel";
 import { DepartmentPerformanceChart, TaskStatusDonut, WorkloadChart } from "./charts";
 
 const grid4 = "grid gap-4 sm:grid-cols-2 xl:grid-cols-4";
-
-/** Placeholder card for the ticketing module (Day 2). Shows no fake numbers. */
-function TicketsPending({ title }: { title: string }) {
-  return (
-    <Panel title={title} description="Internal ticketing">
-      <EmptyState icon={Ticket} title="Ticketing is not enabled yet" description="This panel will show live ticket data once the Tickets module is switched on." className="py-8" />
-    </Panel>
-  );
-}
 
 /* ------------------------------------------------------------------ */
 
@@ -130,7 +121,7 @@ export function ManagerDashboardView({ data }: { data: ManagerData }) {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <StatCard label="Managed projects" value={s.managedProjects} icon={FolderKanban} href="/projects" />
         <StatCard label="Pending tasks" value={s.pendingTasks} icon={Clock} tone="amber" />
-        <StatCard label="Awaiting review" value={s.awaitingReview} icon={ClipboardCheck} tone="violet" />
+        <StatCard label="Work requests" value={s.pendingWorkRequests} icon={ClipboardCheck} tone="violet" href="/tasks?workQueue=pending" hint={`${s.awaitingReview} tasks awaiting completion review`} />
         <StatCard label="Due this week" value={s.upcomingDeadlines} icon={CalendarClock} tone="blue" />
         <StatCard label="Overdue" value={s.overdueTasks} icon={AlarmClock} tone="red" />
       </div>
@@ -174,7 +165,15 @@ export function ManagerDashboardView({ data }: { data: ManagerData }) {
         <Panel title="Upcoming deadlines" description="Overdue and due within 7 days">
           <TaskList tasks={data.deadlines} emptyTitle="No upcoming deadlines" />
         </Panel>
-        <TicketsPending title="New internal tickets" />
+        <TicketsPanel title="New internal tickets" />
+      </div>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Panel title="Work requests awaiting approval" description="Descriptions and proposed assignments from project department leaders" href="/tasks?workQueue=pending">
+          <TaskList tasks={data.workRequests} emptyTitle="No work requests waiting" />
+        </Panel>
+        <Panel title="Project work needing an assignee" href="/tasks?workQueue=unassigned">
+          <TaskList tasks={data.unassignedWork} emptyTitle="All work is assigned" />
+        </Panel>
       </div>
     </div>
   );
@@ -268,7 +267,7 @@ export function EmployeeDashboardView({ data }: { data: EmployeeData }) {
             <EmptyState icon={Bell} title="No notifications" className="py-10" />
           )}
         </Panel>
-        <TicketsPending title="My tickets" />
+        <TicketsPanel title="My tickets" />
       </div>
     </div>
   );

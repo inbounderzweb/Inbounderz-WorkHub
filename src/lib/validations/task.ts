@@ -32,7 +32,9 @@ export const createTaskSchema = z
     ...taskFields,
     project: objectId,
     department: objectId,
-    owner: objectId,
+    /** Optional: leave empty and the project manager assigns someone later. */
+    owner: optionalObjectId,
+    requestProjectApproval: z.boolean().optional().default(false),
     parentTask: optionalObjectId,
     status: z.enum(["BACKLOG", "TODO"]).default("TODO"),
     description: taskFields.description.optional().default(""),
@@ -45,7 +47,7 @@ export const createTaskSchema = z
     approvalMode: z.enum(APPROVAL_MODES).optional(),
   })
   .omit({ actualHours: true })
-  .refine((v) => !v.collaborators.includes(v.owner), {
+  .refine((v) => !v.owner || !v.collaborators.includes(v.owner), {
     path: ["collaborators"],
     message: "The owner can't also be a collaborator",
   })
@@ -54,7 +56,13 @@ export type CreateTaskInput = z.input<typeof createTaskSchema>;
 
 export const updateTaskSchema = z.object(taskFields).partial().refine(datesInOrder, datesMessage);
 
-export const assignTaskSchema = z.object({ department: objectId, owner: objectId });
+export const assignTaskSchema = z.object({ department: objectId, owner: objectId, requestProjectApproval: z.boolean().optional().default(false) });
+export const workApprovalSchema = z.object({
+  action: z.enum(["REQUEST", "APPROVE", "REQUEST_CHANGES"]),
+  comment: z.string().trim().max(2000).optional().default(""),
+}).refine((v) => v.action !== "REQUEST_CHANGES" || v.comment.length >= 3, {
+  path: ["comment"], message: "Explain what needs to change",
+});
 export const taskStatusSchema = z.object({
   status: z.enum(TASK_STATUSES),
   note: z.string().trim().max(2000).optional().default(""),
@@ -71,6 +79,11 @@ export const taskReviewSchema = z
 export const taskBlockerSchema = z
   .object({ action: z.enum(["REPORT", "CLEAR"]), reason: z.string().trim().max(2000).optional().default("") })
   .refine((v) => v.action === "CLEAR" || v.reason.length >= 3, { path: ["reason"], message: "Describe the blocker" });
+export const taskTimerSchema = z.object({
+  action: z.enum(["START", "PAUSE"]),
+  /** Optional: why the work was paused. */
+  reason: z.string().trim().max(500).optional().default(""),
+});
 export const taskCommentSchema = z.object({ body: z.string().trim().min(1, "Write a comment").max(5000) });
 export const checklistAddSchema = z.object({ text: z.string().trim().min(1, "Enter an item").max(300) });
 export const checklistUpdateSchema = z.object({
@@ -87,6 +100,7 @@ const csvStatuses = z
 
 export const taskListQuerySchema = z.object({
   scope: z.enum(["mine", "all"]).optional().default("mine"),
+  workQueue: z.enum(["", "pending", "unassigned"]).optional().default(""),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(300).default(20),
   q: z.string().trim().max(100).optional().default(""),

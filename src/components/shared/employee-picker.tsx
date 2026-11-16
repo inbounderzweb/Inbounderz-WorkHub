@@ -13,7 +13,7 @@ import { UserAvatar } from "./user-avatar";
 
 /** Picker option: an employee, optionally with a custom subtitle (e.g. project role). */
 export type PickerOption = Pick<EmployeeOptionDTO, "id" | "name" | "email" | "employeeId"> &
-  Partial<Pick<EmployeeOptionDTO, "role" | "status">> & { subtitle?: string };
+  Partial<Pick<EmployeeOptionDTO, "role" | "status">> & { subtitle?: string; avatarUrl?: string };
 
 type BaseProps = {
   options: PickerOption[] | undefined;
@@ -94,7 +94,7 @@ export function EmployeePicker(props: SingleProps | MultiProps) {
                 ) : null}
                 {options.map((o) => (
                   <CommandItem key={o.id} value={`${o.name} ${o.email} ${o.employeeId}`} onSelect={() => toggle(o.id)}>
-                    <UserAvatar name={o.name} size="sm" />
+                    <UserAvatar name={o.name} src={o.avatarUrl} size="sm" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm">{o.name}</p>
                       <p className="truncate text-xs text-muted-foreground">

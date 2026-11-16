@@ -14,6 +14,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { FormRow } from "@/components/shared/form-row";
 import { EmployeePicker } from "@/components/shared/employee-picker";
 import { useEmployeeOptions } from "@/hooks/use-options";
+import { useCurrentUser } from "@/components/providers/user-provider";
 import { createDepartmentSchema, type CreateDepartmentInput } from "@/lib/validations/department";
 import { api } from "@/lib/http";
 import { handleFormError } from "@/lib/form";
@@ -29,6 +30,7 @@ function defaults(d?: DepartmentDTO): CreateDepartmentInput {
     description: d?.description ?? "",
     head: d?.head?.id ?? "",
     teamLeaders: d?.teamLeaders.map((t) => t.id) ?? [],
+    projectManagers: d?.projectManagers?.map((t) => t.id) ?? [],
     status: d?.status ?? "ACTIVE",
     color: d?.color ?? DEPARTMENT_COLORS[0],
   };
@@ -46,6 +48,7 @@ export function DepartmentFormDialog({
   onSaved?: (d: DepartmentDTO) => void;
 }) {
   const isEdit = !!department;
+  const me = useCurrentUser();
   const { register, handleSubmit, control, formState, reset, setError } = useForm<CreateDepartmentInput>({
     resolver: zodResolver(createDepartmentSchema) as never,
     defaultValues: defaults(department),
@@ -55,6 +58,7 @@ export function DepartmentFormDialog({
   }, [open, department, reset]);
 
   const { data: heads, isLoading: headsLoading } = useEmployeeOptions({ role: "DEPARTMENT_HEAD", status: "ACTIVE" }, open);
+  const { data: pms, isLoading: pmsLoading } = useEmployeeOptions({ role: "PROJECT_MANAGER", status: "ACTIVE" }, open && me.role === "SUPER_ADMIN");
   const { data: leaders, isLoading: leadersLoading } = useEmployeeOptions({ role: "TEAM_LEADER", status: "ACTIVE" }, open);
   // Team leaders must belong to this department (or be unassigned and join it).
   const leaderOptions = leaders?.filter((l) => !l.departmentId || l.departmentId === department?.id);
@@ -133,6 +137,17 @@ export function DepartmentFormDialog({
               )}
             />
           </FormRow>
+          {me.role === "SUPER_ADMIN" ? (
+            <FormRow label="Ticket approvers (Project Managers)" htmlFor="d-pms" error={e.projectManagers?.message} description="They approve and assign tickets raised to this department. Without one, only a Super Admin can triage." className="sm:col-span-2">
+              <Controller
+                control={control}
+                name="projectManagers"
+                render={({ field }) => (
+                  <EmployeePicker id="d-pms" multiple options={pms} loading={pmsLoading} value={field.value ?? []} onChange={field.onChange} placeholder="Select project managers" emptyText="No active Project Managers." invalid={!!e.projectManagers} />
+                )}
+              />
+            </FormRow>
+          ) : null}
           {isEdit ? (
             <FormRow label="Status" htmlFor="d-status" error={e.status?.message} description="Archived departments can't receive new employees." className="sm:col-span-2">
               <Controller

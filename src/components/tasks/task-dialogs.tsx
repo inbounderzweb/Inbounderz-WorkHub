@@ -6,13 +6,16 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { FormRow } from "@/components/shared/form-row";
 import { EmployeePicker } from "@/components/shared/employee-picker";
+import { useCurrentUser } from "@/components/providers/user-provider";
+import { useTaskDepartmentOptions } from "@/hooks/use-options";
 import { useProjectDetail, useProjectTeam } from "@/hooks/use-work-options";
 import { api, ApiClientError } from "@/lib/http";
 import { humanize, type TaskStatus } from "@/lib/constants";
-import type { TaskDetailDTO } from "@/types/dto";
+import type { TaskDetailDTO, TaskListItemDTO } from "@/types/dto";
 import { transitionLabel } from "./task-status";
 
 function useSubmit(onDone: () => void, close: () => void) {
@@ -137,6 +140,32 @@ export function ReviewDialog({
   );
 }
 
+export function WorkApprovalDialog({ taskId, action, onOpenChange, onDone }: {
+  taskId: string; action: "REQUEST" | "REQUEST_CHANGES" | null; onOpenChange: (o: boolean) => void; onDone: () => void;
+}) {
+  const [comment, setComment] = useState("");
+  const { pending, error, run } = useSubmit(onDone, () => onOpenChange(false));
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open
+    if (action) setComment("");
+  }, [action]);
+  if (!action) return null;
+  const changes = action === "REQUEST_CHANGES";
+  return <Dialog open onOpenChange={(o) => !pending && onOpenChange(o)}>
+    <DialogContent className="sm:max-w-md">
+      <DialogHeader><DialogTitle>{changes ? "Request changes to work" : "Request Project Manager approval"}</DialogTitle>
+        <DialogDescription>{changes ? "Send feedback to the requester. Work stays on hold until the request is approved." : "Send the description and proposed assignee to the project managers. Work can start once a manager approves it."}</DialogDescription></DialogHeader>
+      <FormRow label={changes ? "What needs to change?" : "Note (optional)"} htmlFor="work-comment" required={changes} error={error ?? undefined}>
+        <Textarea id="work-comment" value={comment} onChange={(e) => setComment(e.target.value)} maxLength={2000} rows={4} />
+      </FormRow>
+      <DialogFooter><Button variant="outline" disabled={pending} onClick={() => onOpenChange(false)}>Cancel</Button>
+        <Button disabled={pending || (changes && comment.trim().length < 3)} onClick={() => run(() => api(`/api/tasks/${taskId}/work-approval`, { method: "POST", body: { action, comment } }), changes ? "Changes requested" : "Sent to Project Manager for approval")}>
+          {pending ? <Spinner /> : null}{changes ? "Send feedback" : "Request approval"}
+        </Button></DialogFooter>
+    </DialogContent>
+  </Dialog>;
+}
+
 export function BlockerDialog({ taskId, open, onOpenChange, onDone }: { taskId: string; open: boolean; onOpenChange: (o: boolean) => void; onDone: () => void }) {
   const [reason, setReason] = useState("");
   const { pending, run } = useSubmit(onDone, () => onOpenChange(false));
@@ -166,28 +195,34 @@ export function BlockerDialog({ taskId, open, onOpenChange, onDone }: { taskId: 
 }
 
 /** Reassign: department (of the project) → eligible member of that department. */
-export function ReassignDialog({ task, open, onOpenChange, onDone }: { task: TaskDetailDTO; open: boolean; onOpenChange: (o: boolean) => void; onDone: () => void }) {
+export function ReassignDialog({ task, open, onOpenChange, onDone }: { task: TaskListItemDTO; open: boolean; onOpenChange: (o: boolean) => void; onDone: () => void }) {
+  const me = useCurrentUser();
   const [department, setDepartment] = useState(task.department?.id ?? "");
   const [owner, setOwner] = useState<string | null>(task.owner?.id ?? null);
+  const [requestApproval, setRequestApproval] = useState(false);
   const { pending, run } = useSubmit(onDone, () => onOpenChange(false));
   const { data: project } = useProjectDetail(open ? task.project?.id : null);
-  const { data: team, isLoading } = useProjectTeam(open && department ? task.project?.id : null, department);
+  const { data: team, isLoading } = useProjectTeam(open && department ? task.project?.id : null, department, true);
 
   useEffect(() => {
     if (open) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open
       setDepartment(task.department?.id ?? "");
       setOwner(task.owner?.id ?? null);
+      setRequestApproval(task.workApprovalStatus === "PENDING" || task.workApprovalStatus === "CHANGES_REQUESTED");
     }
-  }, [open, task.department?.id, task.owner?.id]);
+  }, [open, task.department?.id, task.owner?.id, task.workApprovalStatus]);
 
-  const departments = (project?.departments ?? []).filter((d) => project?.can.taskDepartments.includes(d.id));
+  const { data: allDepartments } = useTaskDepartmentOptions(open);
+  const departments = project?.can.manageTeam ? allDepartments ?? project.departments : (project?.departments ?? []).filter((d) => project?.can.taskDepartments.includes(d.id));
+  const approvesRequest = !!project?.can.manageTeam && task.workApprovalStatus === "PENDING";
+  const sendsRequest = !!project && !project.can.manageTeam && requestApproval;
   return (
     <Dialog open={open} onOpenChange={(o) => !pending && onOpenChange(o)}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Reassign {task.taskNumber}</DialogTitle>
-          <DialogDescription>Only employees allocated to this project under the chosen department are eligible.</DialogDescription>
+          <DialogTitle>Assign {task.taskNumber}</DialogTitle>
+          <DialogDescription>Choose yourself or an eligible department employee. You can send the proposed assignment to the Project Manager for approval.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <FormRow label="Department" htmlFor="ra-dept">
@@ -198,6 +233,11 @@ export function ReassignDialog({ task, open, onOpenChange, onDone }: { task: Tas
               </SelectContent>
             </Select>
           </FormRow>
+          {(team ?? []).some((m) => m.id === me.id) ? <Button type="button" variant="outline" size="sm" onClick={() => setOwner(me.id)}>Assign to me</Button> : null}
+          {project && !project.can.manageTeam ? <label className="flex items-start gap-3 rounded-lg border p-3">
+            <Switch checked={requestApproval} onCheckedChange={setRequestApproval} disabled={task.workApprovalStatus === "PENDING"} />
+            <span className="text-sm">Request Project Manager approval before work starts</span>
+          </label> : null}
           <FormRow label="New owner" htmlFor="ra-owner">
             <EmployeePicker
               id="ra-owner"
@@ -206,14 +246,14 @@ export function ReassignDialog({ task, open, onOpenChange, onDone }: { task: Tas
               value={owner}
               onChange={setOwner}
               disabled={!department}
-              emptyText="Nobody from this department is allocated to the project."
+              emptyText="No active employees in this department."
             />
           </FormRow>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>Cancel</Button>
-          <Button disabled={pending || !owner || !department} onClick={() => run(() => api(`/api/tasks/${task.id}/assign`, { method: "POST", body: { department, owner } }), "Task reassigned")}>
-            {pending ? <Spinner /> : null} Reassign
+          <Button disabled={pending || !owner || !department} onClick={() => run(() => api(`/api/tasks/${task.id}/assign`, { method: "POST", body: { department, owner, requestProjectApproval: sendsRequest } }), sendsRequest ? "Sent to Project Manager for approval" : approvesRequest ? "Work approved and assigned" : "Task assigned")}>
+            {pending ? <Spinner /> : null} {sendsRequest ? "Request approval" : approvesRequest ? "Approve and assign" : "Assign"}
           </Button>
         </DialogFooter>
       </DialogContent>

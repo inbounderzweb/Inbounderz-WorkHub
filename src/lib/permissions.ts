@@ -53,6 +53,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
   SUPER_ADMIN: ALL,
   PROJECT_MANAGER: [
     "employee:read",
+    "employee:create",
     "department:read",
     "project:read",
     "project:manage",
@@ -108,11 +109,12 @@ export function hasPermission(role: RoleKey | undefined | null, permission: Perm
 
 /**
  * Roles a given role may grant when creating/editing employees.
+ * Project Managers can onboard Department Heads, Team Leaders and Employees across departments.
  * Department Heads can only onboard Employees and Team Leaders into their own departments.
  */
 export const ASSIGNABLE_ROLES: Record<RoleKey, RoleKey[]> = {
   SUPER_ADMIN: ["SUPER_ADMIN", "PROJECT_MANAGER", "DEPARTMENT_HEAD", "TEAM_LEADER", "EMPLOYEE"],
-  PROJECT_MANAGER: [],
+  PROJECT_MANAGER: ["DEPARTMENT_HEAD", "TEAM_LEADER", "EMPLOYEE"],
   DEPARTMENT_HEAD: ["TEAM_LEADER", "EMPLOYEE"],
   TEAM_LEADER: [],
   EMPLOYEE: [],

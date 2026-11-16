@@ -44,8 +44,9 @@ import { APPROVAL_MODE_LABELS, humanize, type TaskStatus } from "@/lib/constants
 import { cn } from "@/lib/utils";
 import type { TaskDetailDTO } from "@/types/dto";
 import { TaskFormDialog } from "./task-form-dialog";
-import { BlockerDialog, ReassignDialog, ReviewDialog, StatusDialog } from "./task-dialogs";
+import { BlockerDialog, ReassignDialog, ReviewDialog, StatusDialog, WorkApprovalDialog } from "./task-dialogs";
 import { transitionLabel } from "./task-status";
+import { TaskTimerPanel } from "./task-timer";
 
 const PRIMARY: TaskStatus[] = ["IN_PROGRESS", "IN_REVIEW", "COMPLETED"];
 
@@ -73,6 +74,7 @@ export function TaskDetail({ id }: { id: string }) {
   const { data: t, error, isLoading, mutate } = useSWR<TaskDetailDTO>(`/api/tasks/${id}`, fetcher);
   const [statusTarget, setStatusTarget] = useState<TaskStatus | null>(null);
   const [review, setReview] = useState<"APPROVE" | "REQUEST_CHANGES" | null>(null);
+  const [workAction, setWorkAction] = useState<"REQUEST" | "REQUEST_CHANGES" | null>(null);
   const [blockerOpen, setBlockerOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [reassignOpen, setReassignOpen] = useState(false);
@@ -140,6 +142,11 @@ export function TaskDetail({ id }: { id: string }) {
             </div>
           </div>
           <div className="flex flex-wrap gap-2 lg:justify-end">
+            {t.can.requestWorkApproval ? <Button onClick={() => setWorkAction("REQUEST")}><ShieldCheck /> Request Project Manager approval</Button> : null}
+            {t.can.reviewWorkRequest ? <>
+              <Button disabled={busy === "work-approve"} onClick={() => t.owner ? act("work-approve", () => api(`/api/tasks/${t.id}/work-approval`, { method: "POST", body: { action: "APPROVE" } }), "Work approved and assigned") : setReassignOpen(true)}><CheckCircle2 /> {t.owner ? "Approve work request" : "Approve and assign"}</Button>
+              <Button variant="outline" onClick={() => setWorkAction("REQUEST_CHANGES")}><RotateCcw /> Request changes to work</Button>
+            </> : null}
             {t.can.review ? (
               <>
                 <Button onClick={() => setReview("APPROVE")}><CheckCircle2 /> Approve</Button>
@@ -161,6 +168,15 @@ export function TaskDetail({ id }: { id: string }) {
 
         {/* Contextual banners */}
         <div className="mt-4 space-y-2 empty:hidden">
+          {t.workApprovalStatus === "PENDING" ? <div className="rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm text-violet-900">
+            <p className="font-medium">Awaiting Project Manager approval to start work</p>
+            <p>{t.workApproval.requestedBy?.name ?? "A department leader"} requested review of this work description. {t.owner ? `${t.owner.name} is the proposed assignee.` : "The Project Manager will choose an assignee."}</p>
+            {t.workApproval.comment ? <p className="mt-1 whitespace-pre-wrap">{t.workApproval.comment}</p> : null}
+          </div> : null}
+          {t.workApprovalStatus === "CHANGES_REQUESTED" ? <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm text-orange-900">
+            <p className="font-medium">Changes requested to the work description</p><p className="whitespace-pre-wrap">{t.workApproval.comment}</p><p>Update the request and send it to the Project Manager again before starting work.</p>
+          </div> : null}
+          {t.workApprovalStatus === "APPROVED" ? <p className="rounded-lg border p-3 text-sm">Work request approved by {t.workApproval.reviewedBy?.name ?? "the Project Manager"}.</p> : null}
           {t.status === "CHANGES_REQUESTED" && lastReview ? (
             <div className="flex gap-3 rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm text-orange-900">
               <MessageSquareWarning className="mt-0.5 size-4 shrink-0" />
@@ -349,7 +365,7 @@ export function TaskDetail({ id }: { id: string }) {
         {/* Sidebar */}
         <div className="space-y-6">
           <Panel title="Details" bodyClassName="divide-y">
-            <Row label="Owner">{t.owner ? <Person name={t.owner.name} /> : "—"}</Row>
+            <Row label={t.workApprovalStatus === "PENDING" || t.workApprovalStatus === "CHANGES_REQUESTED" ? "Proposed owner" : "Owner"}>{t.owner ? <Person name={t.owner.name} /> : "—"}</Row>
             <Row label="Department">
               {t.department ? <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-full" style={{ backgroundColor: t.department.color }} />{t.department.name}</span> : "—"}
             </Row>
@@ -387,10 +403,12 @@ export function TaskDetail({ id }: { id: string }) {
             {t.completedAt ? <Row label="Completed">{dateFmt(t.completedAt)}</Row> : null}
           </Panel>
 
+          <TaskTimerPanel task={t} onChanged={() => mutate()} />
+
           {t.can.edit || t.can.reassign || t.can.reportBlocker ? (
             <Panel title="Actions" bodyClassName="flex flex-col gap-2 p-3">
               {t.can.edit ? <Button variant="outline" className="justify-start" onClick={() => setEditOpen(true)}><Pencil /> Edit task</Button> : null}
-              {t.can.reassign && !["COMPLETED", "CANCELLED"].includes(t.status) ? <Button variant="outline" className="justify-start" onClick={() => setReassignOpen(true)}><UserRoundCog /> Reassign</Button> : null}
+              {t.can.reassign && !["COMPLETED", "CANCELLED"].includes(t.status) ? <Button variant="outline" className="justify-start" onClick={() => setReassignOpen(true)}><UserRoundCog /> {t.owner ? "Reassign" : "Assign"}</Button> : null}
               {t.can.addSubtask ? <Button variant="outline" className="justify-start" onClick={() => setSubtaskOpen(true)}><GitBranch /> Add subtask</Button> : null}
               {t.can.reportBlocker && !t.blocker.isBlocked ? <Button variant="outline" className="justify-start border-red-200 text-red-700 hover:bg-red-50" onClick={() => setBlockerOpen(true)}><AlertOctagon /> Report blocker</Button> : null}
             </Panel>
@@ -420,6 +438,7 @@ export function TaskDetail({ id }: { id: string }) {
 
       <StatusDialog task={t} status={statusTarget} onOpenChange={(o) => !o && setStatusTarget(null)} onDone={() => mutate()} />
       <ReviewDialog taskId={t.id} decision={review} onOpenChange={(o) => !o && setReview(null)} onDone={() => mutate()} />
+      <WorkApprovalDialog taskId={t.id} action={workAction} onOpenChange={(o) => !o && setWorkAction(null)} onDone={() => mutate()} />
       <BlockerDialog taskId={t.id} open={blockerOpen} onOpenChange={setBlockerOpen} onDone={() => mutate()} />
       {t.can.edit ? <TaskFormDialog open={editOpen} onOpenChange={setEditOpen} task={t} onSaved={() => mutate()} /> : null}
       {t.can.reassign ? <ReassignDialog task={t} open={reassignOpen} onOpenChange={setReassignOpen} onDone={() => mutate()} /> : null}
