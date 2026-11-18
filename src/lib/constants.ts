@@ -185,6 +185,39 @@ export const REVIEW_OVERDUE_HOURS = 48;
 
 export const TICKET_CATEGORIES = ["Design", "Development", "Content", "Marketing", "Support", "Other"] as const;
 
+/** Suggested deliverable types. Any other type can be typed in; these are only suggestions. */
+export const DELIVERABLE_TYPES = [
+  "Video",
+  "Reel",
+  "Photo",
+  "Product Image",
+  "Social Media Post",
+  "Story",
+  "Banner",
+  "Poster",
+  "Flyer",
+  "Logo",
+  "Brochure",
+  "Thumbnail",
+  "Web Page",
+  "Blog Article",
+  "Email Template",
+] as const;
+export const DELIVERABLE_LIMIT = 20;
+export const DELIVERABLE_MAX_QUANTITY = 1000;
+/**
+ * Derived from the quantities, never stored, so it can't disagree with them.
+ * COMPLETED only once the full quantity is verified by the reviewer.
+ */
+export const DELIVERABLE_STATUSES = ["NOT_STARTED", "IN_PROGRESS", "AWAITING_VERIFICATION", "COMPLETED"] as const;
+export type DeliverableStatus = (typeof DELIVERABLE_STATUSES)[number];
+export const DELIVERABLE_STATUS_LABELS: Record<DeliverableStatus, string> = {
+  NOT_STARTED: "Not started",
+  IN_PROGRESS: "In progress",
+  AWAITING_VERIFICATION: "Awaiting verification",
+  COMPLETED: "Completed",
+};
+
 /** Workload model used when a Project Manager picks an assignee. */
 export const EMPLOYEE_CAPACITY_ITEMS = 5;
 export const EMPLOYEE_CAPACITY_HOURS = 40;

@@ -2,6 +2,26 @@ import { Schema, type InferSchemaType, type Types } from "mongoose";
 import { REVIEW_STATUSES, TASK_PRIORITIES, TICKET_STATUSES } from "@/lib/constants";
 import { defineModel } from "./_helpers";
 
+const wholeNumber = { validator: Number.isInteger, message: "Must be a whole number" };
+
+/**
+ * One requested output ("2 Videos"). Embedded: it belongs to exactly one ticket, the list is
+ * bounded, and it must change atomically with the ticket's status. The subdocument `_id` is the
+ * stable reference other records (tasks) can point at. Status is derived, see lib/deliverables.ts.
+ */
+const DeliverableSchema = new Schema(
+  {
+    type: { type: String, required: true, trim: true, maxlength: 60 },
+    quantity: { type: Number, required: true, min: 1, max: 1000, validate: wholeNumber },
+    specifications: { type: String, trim: true, default: "", maxlength: 2000 },
+    /** Reported by the assignee. Never above `quantity`. */
+    completedQuantity: { type: Number, min: 0, default: 0, validate: wholeNumber },
+    /** Confirmed by the reviewer. Never above `completedQuantity`. */
+    verifiedQuantity: { type: Number, min: 0, default: 0, validate: wholeNumber },
+  },
+  { _id: true }
+);
+
 const TimeLogSchema = new Schema(
   {
     user: { type: Schema.Types.ObjectId, ref: "User", required: true },
@@ -57,6 +77,8 @@ const TicketSchema = new Schema(
     /** Hint for the Project Manager only. Never assigns or notifies anyone. */
     suggestedEmployee: { type: Schema.Types.ObjectId, ref: "User", default: null },
     referenceLinks: [{ type: String, trim: true, maxlength: 500 }],
+    /** Requested outputs with quantities. Empty on older tickets, which keep working as before. */
+    deliverables: { type: [DeliverableSchema], default: [] },
     dueDate: { type: Date, default: null },
 
     // Triage (Project Manager)

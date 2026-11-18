@@ -15,7 +15,19 @@ import {
 } from "@/lib/constants";
 import { Department, nextSequence, Ticket, TicketActivity, User } from "@/models";
 import { canReviewDeliverable, isReviewOverdue, reviewAlreadyStarted, reviewRoutedTo, reviewerProblem } from "@/lib/ticket-review";
-import type { Paginated, ReviewerOptionDTO, ReviewQueueRowDTO, TeamWorkloadDTO, TicketActivityDTO, TicketDetailDTO, TicketDTO, TicketSummaryDTO, WorkloadRowDTO } from "@/types/dto";
+import {
+  applyProgress,
+  applyVerification,
+  deliverableStatus,
+  deliverableSummary,
+  describeDeliverableChanges,
+  mergeDeliverables,
+  progressText,
+  unfinishedDeliverables,
+  verifyAll,
+  type DeliverableRecord,
+} from "@/lib/deliverables";
+import type { DeliverableDTO, Paginated, ReviewerOptionDTO, ReviewQueueRowDTO, TeamWorkloadDTO, TicketActivityDTO, TicketDetailDTO, TicketDTO, TicketSummaryDTO, WorkloadRowDTO } from "@/types/dto";
 import type {
   createTicketSchema,
   reviewQueueQuerySchema,
@@ -55,8 +67,20 @@ async function log(
   t: { _id: any; ticketNumber: string },
   actorId: string,
   action: string,
-  extra: { fromStatus?: string | null; toStatus?: string | null; from?: unknown; to?: unknown; message?: string } = {}
+  extra: {
+    fromStatus?: string | null;
+    toStatus?: string | null;
+    from?: unknown;
+    to?: unknown;
+    message?: string;
+    /** Extra field-level before/after values for the audit trail. */
+    changes?: Record<string, { from: unknown; to: unknown }>;
+  } = {}
 ) {
+  const changes = {
+    ...(extra.fromStatus || extra.toStatus ? { status: { from: extra.fromStatus ?? null, to: extra.toStatus ?? null } } : {}),
+    ...(extra.changes ?? {}),
+  };
   await TicketActivity.create({
     ticket: t._id,
     actor: oid(actorId),
@@ -73,8 +97,42 @@ async function log(
     entityType: "Ticket",
     entityId: t._id,
     summary: `${t.ticketNumber}: ${action.toLowerCase().replaceAll("_", " ")}${extra.message ? ` – ${extra.message.slice(0, 120)}` : ""}`,
-    changes: extra.fromStatus || extra.toStatus ? { status: { from: extra.fromStatus ?? null, to: extra.toStatus ?? null } } : null,
+    changes: Object.keys(changes).length ? changes : null,
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* Deliverables (rules in lib/deliverables.ts)                         */
+/* ------------------------------------------------------------------ */
+
+const recordsOf = (t: any): DeliverableRecord[] =>
+  (t.deliverables ?? []).map((d: any) => ({
+    id: s(d._id),
+    type: d.type,
+    quantity: d.quantity,
+    specifications: d.specifications ?? "",
+    completedQuantity: d.completedQuantity ?? 0,
+    verifiedQuantity: d.verifiedQuantity ?? 0,
+  }));
+
+/** Back to the stored shape. Existing rows keep their `_id`; mongoose assigns one to new rows. */
+const toStored = (list: DeliverableRecord[]) =>
+  list.map(({ id, ...rest }) => (id ? { _id: oid(id), ...rest } : rest));
+
+const toDeliverableDTO = (d: DeliverableRecord): DeliverableDTO => ({ ...d, id: d.id!, status: deliverableStatus(d) });
+
+/** Compact "Videos 2, Banner 1" form for the audit trail's before/after values. */
+const deliverablesSnapshot = (list: DeliverableRecord[]) => list.map((d) => `${d.type} ${d.quantity}`).join(", ") || "none";
+
+function assertDeliverables(errors: Record<string, string>) {
+  const keys = Object.keys(errors);
+  if (keys.length) throw unprocessable(errors[keys[0]], errors);
+}
+
+/** Work can't go to review, or be approved, while a requested quantity hasn't been reached. */
+function assertDeliverablesDone(ticket: any, what: string) {
+  const open = unfinishedDeliverables(recordsOf(ticket));
+  if (open.length) throw unprocessable(`${what}: ${open.map(progressText).join(", ")}`);
 }
 
 /**
@@ -392,6 +450,7 @@ function toDTO(t: any): TicketDTO {
     dueDate: iso(t.dueDate),
     expectedCompletion: iso(t.expectedCompletion),
     isOverdue: isOverdue(t),
+    deliverableSummary: t.deliverables?.length ? deliverableSummary(recordsOf(t)) : null,
     createdAt: iso(t.createdAt)!,
     updatedAt: iso(t.updatedAt)!,
   };
@@ -429,6 +488,7 @@ export async function getTicket(user: CurrentUser, id: string): Promise<TicketDe
     ...toDTO(t),
     description: t.description ?? "",
     referenceLinks: t.referenceLinks ?? [],
+    deliverables: recordsOf(t).map(toDeliverableDTO),
     suggestedEmployee: showSuggestion ? toUserRef(t.suggestedEmployee) : null,
     approvedBy: toUserRef(t.approvedBy),
     approvedAt: iso(t.approvedAt),
@@ -555,6 +615,7 @@ export async function createTicket(user: CurrentUser, input: CreateInput): Promi
     projectManager: input.projectManager ? oid(input.projectManager) : null,
     suggestedEmployee: input.suggestedEmployee ? oid(input.suggestedEmployee) : null,
     referenceLinks: input.referenceLinks,
+    deliverables: toStored(mergeDeliverables([], input.deliverables.map((d) => ({ ...d, id: null }))).next),
     dueDate: toDueDate(input.dueDate),
   });
   await log(ticket, user.id, "CREATED", { toStatus: status, message: input.draft ? "Saved as draft" : `Raised to ${target.name}` });
@@ -611,6 +672,15 @@ export async function updateTicket(user: CurrentUser, id: string, input: UpdateI
     if (input[f] !== undefined) set[f] = input[f];
   }
   if (input.dueDate !== undefined) set.dueDate = toDueDate(input.dueDate);
+  // Before approval the requester shapes the request freely; ids keep existing rows stable.
+  let deliverableChanges: string[] = [];
+  if (input.deliverables !== undefined) {
+    const current = recordsOf(ticket);
+    const { next, errors } = mergeDeliverables(current, input.deliverables);
+    assertDeliverables(errors);
+    deliverableChanges = describeDeliverableChanges(current, next);
+    if (deliverableChanges.length) set.deliverables = toStored(next);
+  }
   const managerChanged = input.projectManager !== undefined && s(input.projectManager) !== s(ticket.projectManager);
   if (managerChanged) {
     if (!can.changeProjectManager) throw unprocessable("The Project Manager cannot be changed in this ticket's current state", { projectManager: "Ticket is no longer editable" });
@@ -643,7 +713,10 @@ export async function updateTicket(user: CurrentUser, id: string, input: UpdateI
   }
   if (!Object.keys(set).length) return;
   const updated = await move(ticket, [ticket.status as TicketStatus], set);
-  await log(ticket, user.id, "UPDATED", { message: `Changed ${Object.keys(set).join(", ")}` });
+  const changedFields = Object.keys(set).filter((k) => k !== "deliverables");
+  await log(ticket, user.id, "UPDATED", {
+    message: [changedFields.length ? `Changed ${changedFields.join(", ")}` : "", ...deliverableChanges].filter(Boolean).join("\n"),
+  });
   if (managerChanged && ticket.status !== "DRAFT") await announceSubmission(updated, user);
   await announceInvolvement(updated, addedDepartments, user);
 }
@@ -909,8 +982,39 @@ export async function ticketAction(user: CurrentUser, id: string, input: ActionI
       return;
     }
 
+    case "record_progress": {
+      need(can.recordProgress, "Only the assignee can record progress while the ticket is In Progress");
+      const { next, errors, changes } = applyProgress(recordsOf(ticket), input.items);
+      assertDeliverables(errors);
+      if (!changes.length) return;
+      await move(ticket, ["IN_PROGRESS"], { deliverables: toStored(next) });
+      await log(base, user.id, "DELIVERABLE_PROGRESS", { message: changes.join("\n") });
+      return;
+    }
+
+    case "change_deliverables": {
+      need(can.changeDeliverables, "Only the ticket's Project Manager can change the requested deliverables");
+      const current = recordsOf(ticket);
+      const { next, errors } = mergeDeliverables(current, input.deliverables);
+      assertDeliverables(errors);
+      const changes = describeDeliverableChanges(current, next);
+      if (!changes.length) throw unprocessable("Nothing was changed");
+      await move(ticket, [from], { deliverables: toStored(next) });
+      await log(base, user.id, "DELIVERABLES_CHANGED", {
+        message: `${input.message}\n${changes.join("\n")}`,
+        changes: { deliverables: { from: deliverablesSnapshot(current), to: deliverablesSnapshot(next) } },
+      });
+      await note({
+        recipients: [ticket.createdBy, ticket.assignee, ticket.assignedReviewer],
+        title: "Requested deliverables changed",
+        message: `${ticket.ticketNumber}: ${changes.join("; ").slice(0, 200)}`,
+      });
+      return;
+    }
+
     case "submit_work": {
       need(can.submitWork);
+      assertDeliverablesDone(ticket, "Record your progress before submitting");
       const tm = timerStop(ticket, "AUTO", "Submitted for review");
       await move(ticket, ["IN_PROGRESS"], { status: "SUBMITTED_FOR_REVIEW", reviewStatus: "PENDING", submittedAt: new Date(), submissionNote: input.message, ...tm.set }, tm.push.timeLog ? tm.push : undefined);
       await log(base, user.id, "WORK_SUBMITTED", { fromStatus: from, toStatus: "SUBMITTED_FOR_REVIEW", message: input.message });
@@ -921,11 +1025,14 @@ export async function ticketAction(user: CurrentUser, id: string, input: ActionI
 
     case "accept": {
       need(can.review, "Only the assigned reviewer can approve this work");
+      // Approval is the verification: it can only happen once every requested quantity is reached.
+      assertDeliverablesDone(ticket, "Not every deliverable is complete, so request changes instead");
       const now = new Date();
+      const verified = ticket.deliverables?.length ? { deliverables: toStored(verifyAll(recordsOf(ticket))) } : {};
       await move(
         ticket,
         ["SUBMITTED_FOR_REVIEW"],
-        { status: "COMPLETED", completedAt: now, reviewStatus: "APPROVED", reviewDecidedBy: oid(user.id), reviewDecidedAt: now },
+        { status: "COMPLETED", completedAt: now, reviewStatus: "APPROVED", reviewDecidedBy: oid(user.id), reviewDecidedAt: now, ...verified },
         { reviewComments: { author: oid(user.id), decision: "APPROVED", comment: input.message, createdAt: now } }
       );
       await log(base, user.id, "COMPLETED", { fromStatus: from, toStatus: "COMPLETED", message: input.message });
@@ -936,13 +1043,27 @@ export async function ticketAction(user: CurrentUser, id: string, input: ActionI
 
     case "request_changes": {
       need(can.review, "Only the assigned reviewer can send this work back");
+      // Optional partial sign-off ("1 of 2 videos is fine"), so verified progress is visible before the end.
+      const verification = applyVerification(recordsOf(ticket), input.verified);
+      assertDeliverables(verification.errors);
       await move(
         ticket,
         ["SUBMITTED_FOR_REVIEW"],
-        { status: "IN_PROGRESS", reviewStatus: "CHANGES_REQUESTED", submittedAt: null, reviewDecidedBy: oid(user.id), reviewDecidedAt: new Date() },
+        {
+          status: "IN_PROGRESS",
+          reviewStatus: "CHANGES_REQUESTED",
+          submittedAt: null,
+          reviewDecidedBy: oid(user.id),
+          reviewDecidedAt: new Date(),
+          ...(verification.changes.length ? { deliverables: toStored(verification.next) } : {}),
+        },
         { reviewComments: { author: oid(user.id), decision: "CHANGES_REQUESTED", comment: input.message, createdAt: new Date() } }
       );
-      await log(base, user.id, "CHANGES_REQUESTED", { fromStatus: from, toStatus: "IN_PROGRESS", message: input.message });
+      await log(base, user.id, "CHANGES_REQUESTED", {
+        fromStatus: from,
+        toStatus: "IN_PROGRESS",
+        message: verification.changes.length ? `${input.message}\nVerified: ${verification.changes.join("; ")}` : input.message,
+      });
       await note({ recipients: [ticket.assignee], title: "Changes requested", message: `${ticket.ticketNumber}: ${input.message}` });
       return;
     }

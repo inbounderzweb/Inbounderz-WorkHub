@@ -138,6 +138,11 @@ export function ticketCan(r: TicketRights, t: TicketLike) {
     resume: (r.assignee || r.triager) && st === "ON_HOLD",
     submitWork: r.assignee && st === "IN_PROGRESS",
     trackTime: r.assignee && st === "IN_PROGRESS",
+    // Only the person doing the work reports progress, and only while working on it.
+    recordProgress: r.assignee && st === "IN_PROGRESS",
+    // The requester edits deliverables through `edit` until approval. Any change after that (or during
+    // triage) is an authorised requirement change by the Project Manager, with a reason on record.
+    changeDeliverables: ((r.triager && !ownTicket) || r.admin) && open && notDraft,
     // Routed to the assigned reviewer (the requester only on legacy tickets without one). Never the assignee.
     review: st === "SUBMITTED_FOR_REVIEW" && r.reviewer,
     // The Project Manager can name or change the reviewer until the ticket closes. During a review it needs a reason.

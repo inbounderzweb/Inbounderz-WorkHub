@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { TASK_PRIORITIES, TICKET_STATUSES } from "@/lib/constants";
+import { DELIVERABLE_LIMIT, DELIVERABLE_MAX_QUANTITY, TASK_PRIORITIES, TICKET_STATUSES } from "@/lib/constants";
 import { objectId, optionalDateString, optionalObjectId } from "./common";
 
 const link = z
@@ -7,6 +7,20 @@ const link = z
   .trim()
   .max(500)
   .refine((v) => /^https?:\/\//i.test(v), "Links must start with http:// or https://");
+
+/** One requested output. `id` is present for rows that already exist on the ticket. */
+export const deliverableInputSchema = z.object({
+  id: objectId.optional().nullable(),
+  type: z.string().trim().min(1, "Choose or type a deliverable type").max(60, "Use at most 60 characters"),
+  quantity: z
+    .number({ message: "Enter a quantity" })
+    .int("Use a whole number")
+    .min(1, "At least 1")
+    .max(DELIVERABLE_MAX_QUANTITY, `At most ${DELIVERABLE_MAX_QUANTITY}`),
+  specifications: z.string().trim().max(2000, "Use at most 2000 characters").optional().default(""),
+});
+const deliverables = z.array(deliverableInputSchema).max(DELIVERABLE_LIMIT, `Up to ${DELIVERABLE_LIMIT} deliverables`);
+const count = z.number().int("Use a whole number").min(0).max(DELIVERABLE_MAX_QUANTITY);
 
 const ticketFields = {
   title: z.string().trim().min(3, "Title is too short").max(200),
@@ -17,6 +31,7 @@ const ticketFields = {
   suggestedEmployee: optionalObjectId,
   projectManager: optionalObjectId,
   referenceLinks: z.array(link).max(10),
+  deliverables,
 };
 
 export const createTicketSchema = z.object({
@@ -24,6 +39,7 @@ export const createTicketSchema = z.object({
   category: ticketFields.category.optional().default("Other"),
   priority: ticketFields.priority.default("MEDIUM"),
   referenceLinks: ticketFields.referenceLinks.optional().default([]),
+  deliverables: deliverables.optional().default([]),
   targetDepartment: objectId,
   /** Other departments to involve as well (optional). */
   additionalDepartments: z.array(objectId).max(5).optional().default([]),
@@ -76,7 +92,19 @@ export const ticketActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("pause_timer"), message: z.string().trim().max(500).optional().default("") }),
   z.object({ action: z.literal("submit_work"), message: z.string().trim().max(2000).optional().default("") }),
   z.object({ action: z.literal("accept"), message: z.string().trim().max(2000).optional().default("") }),
-  z.object({ action: z.literal("request_changes"), message }),
+  z.object({
+    action: z.literal("request_changes"),
+    message,
+    /** Optional partial sign-off: how many completed items of each deliverable the reviewer accepts. */
+    verified: z.array(z.object({ id: objectId, verifiedQuantity: count })).max(DELIVERABLE_LIMIT).optional().default([]),
+  }),
+  /** Assignee records how many items of each deliverable are done. */
+  z.object({
+    action: z.literal("record_progress"),
+    items: z.array(z.object({ id: objectId, completedQuantity: count })).min(1, "Nothing to update").max(DELIVERABLE_LIMIT),
+  }),
+  /** Authorised change to the requested deliverables once the requester can no longer edit. Reason required. */
+  z.object({ action: z.literal("change_deliverables"), deliverables, message }),
   z.object({ action: z.literal("cancel"), message: z.string().trim().max(2000).optional().default("") }),
   z.object({ action: z.literal("escalate"), message }),
   z.object({ action: z.literal("comment"), message }),

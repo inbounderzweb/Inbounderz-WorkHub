@@ -20,6 +20,7 @@ import { TASK_PRIORITIES, TICKET_CATEGORIES, humanize } from "@/lib/constants";
 import { api, fetcher, qs } from "@/lib/http";
 import { handleFormError } from "@/lib/form";
 import { createTicketSchema, type CreateTicketInput } from "@/lib/validations/ticket";
+import { DeliverablesEditor } from "./deliverables-editor";
 import type { TicketDetailDTO, TicketDTO } from "@/types/dto";
 
 function defaults(t?: TicketDetailDTO): CreateTicketInput {
@@ -34,6 +35,7 @@ function defaults(t?: TicketDetailDTO): CreateTicketInput {
     suggestedEmployee: t?.suggestedEmployee?.id ?? "",
     projectManager: t?.projectManager?.id ?? "",
     referenceLinks: t?.referenceLinks ?? [],
+    deliverables: t?.deliverables?.map((d) => ({ id: d.id, type: d.type, quantity: d.quantity, specifications: d.specifications })) ?? [],
     draft: false,
   };
 }
@@ -204,6 +206,23 @@ export function TicketFormDialog({
           </FormRow>
           <FormRow label="Description" htmlFor="tk-desc" required error={e.description?.message} className="sm:col-span-2">
             <Textarea id="tk-desc" rows={5} placeholder="What do you need, sizes / formats, where it will be used, anything the team should know" aria-invalid={!!e.description} {...register("description")} />
+          </FormRow>
+          <FormRow
+            label="Deliverables / required work items (optional)"
+            htmlFor="tk-deliverables"
+            description="What should come out of this ticket, and how many of each. The Project Manager reviews these before approving."
+            className="sm:col-span-2"
+          >
+            <div id="tk-deliverables">
+              <Controller control={control} name="deliverables" render={({ field }) => (
+                <DeliverablesEditor
+                  value={field.value ?? []}
+                  onChange={field.onChange}
+                  errorFor={(i, f) => e.deliverables?.[i]?.[f]?.message}
+                  rootError={e.deliverables?.message ?? e.deliverables?.root?.message}
+                />
+              )} />
+            </div>
           </FormRow>
           <FormRow label="Category" htmlFor="tk-cat">
             <Controller control={control} name="category" render={({ field }) => (

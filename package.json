@@ -12,6 +12,8 @@
     "test:ticket-routing": "node scripts/test-ticket-routing.mjs",
     "test:ticket-review": "node scripts/test-ticket-review.mjs",
     "test:ticket-review-rules": "tsx scripts/test-ticket-review-rules.ts",
+    "test:ticket-deliverables": "node scripts/test-ticket-deliverables.mjs",
+    "test:deliverables-rules": "tsx scripts/test-deliverables-rules.ts",
     "seed": "tsx --conditions=react-server scripts/seed.ts",
     "seed:demo": "tsx --conditions=react-server scripts/seed-demo.ts",
     "db:dev": "tsx scripts/dev-db.ts"

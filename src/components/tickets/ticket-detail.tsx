@@ -28,6 +28,8 @@ import { TicketFormDialog } from "./ticket-form-dialog";
 import { ReviewerPicker } from "./reviewer-picker";
 import { ReviewStatusBadge } from "./review-status-badge";
 import { TicketTriagePanel } from "./ticket-triage";
+import { DeliverablesPanel, RequestChangesDialog } from "./deliverables-panel";
+import { progressText, unfinishedDeliverables } from "@/lib/deliverables";
 
 const dateFmt = (d: string | null) => (d ? format(day(d), "d MMM yyyy") : "—");
 
@@ -76,6 +78,8 @@ const ACTION_LABEL: Record<string, string> = {
   STATUS_CHANGED: "changed the status",
   REVIEWER_ASSIGNED: "assigned a reviewer",
   REVIEWER_CHANGED: "changed the reviewer",
+  DELIVERABLES_CHANGED: "changed the requested deliverables",
+  DELIVERABLE_PROGRESS: "recorded progress",
 };
 
 function Timeline({ items }: { items: TicketActivityDTO[] }) {
@@ -171,6 +175,7 @@ export function TicketDetail({ id }: { id: string }) {
   const [datesOpen, setDatesOpen] = useState(false);
   const [priorityOpen, setPriorityOpen] = useState(false);
   const [reviewerOpen, setReviewerOpen] = useState(false);
+  const [changesOpen, setChangesOpen] = useState(false);
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [conflict, setConflict] = useState<{ ticketNumber: string; key: string; body: Record<string, unknown>; success?: string } | null>(null);
@@ -250,11 +255,31 @@ export function TicketDetail({ id }: { id: string }) {
             {can.respond ? <Button onClick={() => setDialog(MESSAGES.respond)}><MessageSquare /> Reply</Button> : null}
             {can.start ? <Button onClick={simple("start", "Work started")} disabled={!!busy}><Play /> Start work</Button> : null}
             {can.resume ? <Button onClick={simple("resume", "Work resumed")} disabled={!!busy}><Play /> Resume</Button> : null}
-            {can.submitWork ? <Button onClick={() => setDialog(MESSAGES.submit_work)}><Send /> Submit for review</Button> : null}
+            {can.submitWork ? (
+              <Button
+                onClick={() => {
+                  const open = unfinishedDeliverables(t.deliverables);
+                  if (open.length) toast.error("Record your progress first", { description: `Not finished yet: ${open.map(progressText).join(", ")}. Use “Update progress” under Deliverables.` });
+                  else setDialog(MESSAGES.submit_work);
+                }}
+              >
+                <Send /> Submit for review
+              </Button>
+            ) : null}
             {can.review ? (
               <>
-                <Button onClick={() => setDialog(MESSAGES.accept)}><CheckCircle2 /> Approve</Button>
-                <Button variant="outline" onClick={() => setDialog(MESSAGES.request_changes)}>Request changes</Button>
+                <Button
+                  onClick={() =>
+                    setDialog(
+                      t.deliverables.length
+                        ? { ...MESSAGES.accept, description: `This verifies every deliverable (${t.deliverables.map((d) => `${d.quantity} × ${d.type}`).join(", ")}) and completes the ticket.` }
+                        : MESSAGES.accept
+                    )
+                  }
+                >
+                  <CheckCircle2 /> Approve
+                </Button>
+                <Button variant="outline" onClick={() => (t.deliverables.length ? setChangesOpen(true) : setDialog(MESSAGES.request_changes))}>Request changes</Button>
               </>
             ) : null}
             {can.triage && t.status === "PENDING_APPROVAL" ? <Button variant="outline" onClick={simple("start_review", "Review started")} disabled={!!busy}>Start review</Button> : null}
@@ -296,6 +321,8 @@ export function TicketDetail({ id }: { id: string }) {
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           {can.approve || can.assign || can.reassign ? <TicketTriagePanel key={t.status + (t.assignee?.id ?? "")} ticket={t} onDone={() => mutate()} /> : null}
+
+          <DeliverablesPanel ticket={t} run={run} busy={!!busy} />
 
           <TimerConflictDialog ticketNumber={conflict?.ticketNumber ?? null} busy={!!busy} onCancel={() => setConflict(null)} onConfirm={() => conflict && run(conflict.key, { ...conflict.body, pausePrevious: true }, conflict.success)} />
           <TimerPanel id={t.id} kind="ticket" timer={t.timer} canTrack={can.trackTime} onChanged={() => mutate()} />
@@ -421,6 +448,7 @@ export function TicketDetail({ id }: { id: string }) {
       </div>
 
       <MessageDialog spec={dialog} onClose={() => setDialog(null)} onSubmit={(message) => run(dialog!.action, { action: dialog!.action, message }, "Done")} />
+      {changesOpen ? <RequestChangesDialog list={t.deliverables} onClose={() => setChangesOpen(false)} run={run} /> : null}
       {can.setReviewer ? (
         <ReviewerDialog
           key={`r-${t.updatedAt}`}

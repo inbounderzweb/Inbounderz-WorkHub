@@ -1,5 +1,6 @@
 import type {
   ApprovalMode,
+  DeliverableStatus,
   MilestoneStatus,
   ProjectMemberRole,
   DepartmentStatus,
@@ -402,9 +403,23 @@ export type TicketDTO = {
   dueDate: string | null;
   expectedCompletion: string | null;
   isOverdue: boolean;
+  /** Item counts across all deliverables; null when the ticket has none (older tickets). */
+  deliverableSummary: DeliverableSummaryDTO | null;
   createdAt: string;
   updatedAt: string;
 };
+
+export type DeliverableDTO = {
+  id: string;
+  type: string;
+  quantity: number;
+  specifications: string;
+  completedQuantity: number;
+  verifiedQuantity: number;
+  status: DeliverableStatus;
+};
+
+export type DeliverableSummaryDTO = { count: number; requested: number; completed: number; verified: number; percent: number };
 
 export type TicketActivityDTO = {
   id: string;
@@ -435,6 +450,7 @@ export type TicketDetailDTO = TicketDTO & {
   submittedAt: string | null;
   completedAt: string | null;
   attachments: AttachmentDTO[];
+  deliverables: DeliverableDTO[];
   activity: TicketActivityDTO[];
   /** Who the submitted work goes to. `legacy` = no reviewer assigned, so the requester reviews. */
   reviewRoutedTo: { user: UserRef | null; legacy: boolean };
@@ -460,6 +476,8 @@ export type TicketDetailDTO = TicketDTO & {
     resume: boolean;
     submitWork: boolean;
     trackTime: boolean;
+    recordProgress: boolean;
+    changeDeliverables: boolean;
     review: boolean;
     cancel: boolean;
     escalate: boolean;

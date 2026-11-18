@@ -74,7 +74,7 @@ async function main() {
     });
     await check("Reviewer cannot be the same person as the assignee", async () => {
       const t = await newTicket();
-      expect(await action(actors.manager, t.id, { action: "approve", assignee: actors.worker.id, reviewer: actors.worker.id }), 400);
+      expect(await action(actors.manager, t.id, { action: "approve", assignee: actors.worker.id, reviewer: actors.worker.id }), 422);
     });
     await check("Submitted work routes to the reviewer, not the requester", async () => {
       const t = await submitted(actors.reviewer);
@@ -110,14 +110,15 @@ async function main() {
       assert.equal(d.status, "COMPLETED"); assert.equal(d.reviewStatus, "APPROVED");
       const again = await action(actors.reviewer, t.id, { action: "accept" }); assert.ok([403, 409].includes(again.status), `duplicate -> ${again.status}`);
       for (const key of ["worker", "requester"]) {
-        const n = await db.collection("notifications").countDocuments({ entityId: oid(t.id), recipient: actors[key]._id, title: /approved|completed/i });
-        assert.ok(n <= 1, `${key} received ${n} completion notices`);
+        // Exactly one completion notice each ("Ticket approved" at triage is a different event).
+        const n = await db.collection("notifications").countDocuments({ entityId: oid(t.id), recipient: actors[key]._id, title: "Review approved – ticket completed" });
+        assert.equal(n, 1, `${key} received ${n} completion notices`);
       }
       assert.ok(mine(t.id)(await reviews(actors.reviewer, "approved")));
     });
     await check("Reassigning during review needs a reason, records history, and locks out the previous reviewer", async () => {
       const t = await submitted(actors.reviewer);
-      expect(await action(actors.manager, t.id, { action: "set_reviewer", reviewer: actors.reviewer2.id, message: "" }), 400);
+      expect(await action(actors.manager, t.id, { action: "set_reviewer", reviewer: actors.reviewer2.id, message: "" }), 422);
       expect(await action(actors.manager, t.id, { action: "set_reviewer", reviewer: actors.reviewer2.id, message: "Original reviewer is on leave." }));
       const d = await detail(actors.manager, t.id);
       assert.equal(d.assignedReviewer.id, actors.reviewer2.id); assert.ok(d.reviewHistory.length >= 1);

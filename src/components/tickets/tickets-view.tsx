@@ -312,6 +312,11 @@ export function TicketsView({ initialScope = "raised", embedded = false, assigne
                             <span className="flex items-center gap-2 text-xs text-muted-foreground">
                               <span className="font-mono">{t.ticketNumber}</span>
                               <span>{t.category}</span>
+                              {t.deliverableSummary ? (
+                                <span className="tabular-nums" title={`${t.deliverableSummary.completed} of ${t.deliverableSummary.requested} items done, ${t.deliverableSummary.verified} verified`}>
+                                  {t.deliverableSummary.verified}/{t.deliverableSummary.requested} verified
+                                </span>
+                              ) : null}
                               {manual && t.queuePosition === 1 ? <span className="rounded-full bg-primary/10 px-1.5 text-[10px] font-medium text-primary">Next up</span> : null}
                             </span>
                           </Link>
