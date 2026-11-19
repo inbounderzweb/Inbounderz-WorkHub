@@ -10,7 +10,9 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
-    public fieldErrors?: Record<string, string>
+    public fieldErrors?: Record<string, string>,
+    /** Extra machine-readable payload merged into the JSON body (e.g. duplicate candidates). */
+    public data?: Record<string, unknown>
   ) {
     super(message);
   }
@@ -23,6 +25,7 @@ export const forbidden = (msg = "You do not have permission to perform this acti
 export const notFound = (msg = "Not found") => new ApiError(404, msg);
 export const conflict = (msg: string, fieldErrors?: Record<string, string>) =>
   new ApiError(409, msg, fieldErrors);
+export const conflictWith = (msg: string, data: Record<string, unknown>) => new ApiError(409, msg, undefined, data);
 export const unprocessable = (msg: string, fieldErrors?: Record<string, string>) =>
   new ApiError(422, msg, fieldErrors);
 
@@ -44,7 +47,7 @@ function zodFieldErrors(error: ZodError): Record<string, string> {
 
 export function errorResponse(err: unknown): NextResponse {
   if (err instanceof ApiError) {
-    return NextResponse.json({ error: err.message, fieldErrors: err.fieldErrors }, { status: err.status });
+    return NextResponse.json({ ...err.data, error: err.message, fieldErrors: err.fieldErrors }, { status: err.status });
   }
   if (err instanceof ZodError) {
     return NextResponse.json(

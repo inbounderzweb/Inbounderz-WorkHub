@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { hasPermission } from "@/lib/permissions";
 import { useState } from "react";
 import useSWR from "swr";
 import { Building2, FolderKanban, ListTodo, MoreHorizontal, Pencil, Plus, Search, Trash2, Users } from "lucide-react";
@@ -64,7 +65,7 @@ export function DepartmentsView() {
     <div className="space-y-5">
       <PageHeader
         title="Departments"
-        description={me.role === "SUPER_ADMIN" || me.role === "PROJECT_MANAGER" ? "All departments, their leadership and workload." : "Departments you belong to or manage."}
+        description={hasPermission(me.role, "department:read-all") ? "All departments, their leadership and workload." : "Departments you belong to or manage."}
         actions={
           canCreate ? (
             <Button onClick={() => setCreateOpen(true)}>

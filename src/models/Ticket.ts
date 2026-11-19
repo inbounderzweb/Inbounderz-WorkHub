@@ -66,6 +66,12 @@ const TicketSchema = new Schema(
     priority: { type: String, enum: TASK_PRIORITIES, default: "MEDIUM" },
     status: { type: String, enum: TICKET_STATUSES, default: "PENDING_APPROVAL" },
 
+    /** Optional work context: the project this ticket belongs to and the task it sits under. */
+    project: { type: Schema.Types.ObjectId, ref: "Project", default: null },
+    task: { type: Schema.Types.ObjectId, ref: "Task", default: null },
+    /** True when `task` was created from this ticket because the requester picked a project but no task. */
+    taskAutoCreated: { type: Boolean, default: false },
+
     requestingDepartment: { type: Schema.Types.ObjectId, ref: "Department", default: null },
     targetDepartment: { type: Schema.Types.ObjectId, ref: "Department", required: true },
     /** Other departments that also work on / support this ticket (e.g. Graphic Design). */
@@ -148,6 +154,8 @@ TicketSchema.index({ additionalDepartments: 1, status: 1 });
 TicketSchema.index({ assignedReviewer: 1, reviewStatus: 1 });
 TicketSchema.index({ reviewStatus: 1, submittedAt: 1 });
 TicketSchema.index({ projectManager: 1, status: 1 });
+TicketSchema.index({ project: 1 });
+TicketSchema.index({ task: 1 });
 TicketSchema.index({ requestingDepartment: 1, status: 1 });
 TicketSchema.index({ status: 1, dueDate: 1 });
 

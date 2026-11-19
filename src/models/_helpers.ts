@@ -21,3 +21,22 @@ export function defineModel<TSchema extends Schema<any>>(
   }
   return existing ?? mongoose.model<InferSchemaType<TSchema>>(name, schema);
 }
+
+/**
+ * Makes a collection append-only at the application layer: Mongoose update/delete operations on it throw.
+ * This guards every code path that goes through Mongoose. It cannot stop someone with raw database
+ * access, so production should also run the app with a database user that has no update/delete
+ * privilege on these collections.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function makeAppendOnly(schema: Schema<any>, label: string): void {
+  const refuse = () => {
+    throw new Error(`${label} is append-only: records cannot be modified or deleted.`);
+  };
+  for (const op of ["updateOne", "updateMany", "findOneAndUpdate", "findOneAndReplace", "replaceOne", "deleteOne", "deleteMany", "findOneAndDelete"] as const) {
+    schema.pre(op, refuse);
+  }
+  schema.pre("save", function () {
+    if (!this.isNew) refuse();
+  });
+}

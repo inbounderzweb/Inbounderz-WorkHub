@@ -2,7 +2,7 @@
 
 import { createContext, useContext } from "react";
 import type { RoleKey } from "@/lib/constants";
-import { hasPermission, type Permission } from "@/lib/permissions";
+import { hasPermission, setRuntimePermissions, type Permission } from "@/lib/permissions";
 
 /** The subset of the server-side CurrentUser that is safe to send to the browser. */
 export type ClientUser = {
@@ -15,11 +15,15 @@ export type ClientUser = {
   role: RoleKey;
   roleName: string;
   departmentId: string | null;
+  /** Effective permissions of this user's role, including the Super Admin's edits. */
+  permissions: Permission[];
 };
 
 const UserContext = createContext<ClientUser | null>(null);
 
 export function UserProvider({ user, children }: { user: ClientUser; children: React.ReactNode }) {
+  // Same table the server uses, so every client-side hasPermission() reflects the edited matrix.
+  setRuntimePermissions({ [user.role]: user.permissions });
   return <UserContext value={user}>{children}</UserContext>;
 }
 

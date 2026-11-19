@@ -328,6 +328,7 @@ export function TicketsView({ initialScope = "raised", embedded = false, assigne
                             {t.targetDepartment ? <DepartmentChip name={t.targetDepartment.name} color={t.targetDepartment.color} /> : null}
                             {t.additionalDepartments.map((d) => <span key={d.id} className="flex items-center gap-1.5"><span className="text-muted-foreground">+</span><DepartmentChip name={d.name} color={d.color} /></span>)}
                           </span>
+                          {t.project ? <p className="mt-1 max-w-64 truncate text-xs text-muted-foreground">{t.project.name}{t.task ? ` · ${t.task.taskNumber} ${t.task.title}` : ""}</p> : null}
                         </TableCell>
                         <TableCell className="hidden md:table-cell">
                           {person ? <span className="flex items-center gap-2"><UserAvatar name={person.name} size="sm" /><span className="max-w-32 truncate text-sm">{person.name}</span></span> : <span className="text-muted-foreground">{showPerson === "assignee" ? "Unassigned" : "—"}</span>}

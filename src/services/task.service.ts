@@ -224,7 +224,7 @@ async function validateMilestone(projectId: Types.ObjectId, milestone: string | 
   }
 }
 
-async function generateTaskNumber(): Promise<string> {
+export async function generateTaskNumber(): Promise<string> {
   for (let i = 0; i < 20; i++) {
     const n = `TSK-${String(await nextSequence("taskNumber")).padStart(5, "0")}`;
     if (!(await Task.exists({ taskNumber: n }))) return n;

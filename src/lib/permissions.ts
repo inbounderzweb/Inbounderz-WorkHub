@@ -21,6 +21,7 @@ export const PERMISSIONS = {
   "employee:reset-password": "Reset employee passwords",
   // Departments
   "department:read": "View departments",
+  "department:read-all": "See every department, not only your own",
   "department:create": "Create departments",
   "department:update": "Edit departments",
   "department:delete": "Delete departments",
@@ -37,6 +38,12 @@ export const PERMISSIONS = {
   "ticket:create": "Raise internal tickets",
   "ticket:manage": "Manage internal tickets",
   "daily-update:submit": "Submit daily work updates",
+  // Clients. Row-level scope and field-level restriction are applied in services/client-access.ts.
+  "client:read": "View clients the user is associated with (fields depend on role)",
+  "client:create": "Create clients",
+  "client:update": "Edit clients the user is authorised for",
+  "client:manage": "Override duplicate blocks, reassign owners, archive, resolve duplicate reviews",
+  "project:handover": "Create a project from approved client requirements and nominate a Project Manager",
   // Reporting & system
   "report:company": "View company-wide reports",
   "report:project": "View project-level reports",
@@ -55,6 +62,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
     "employee:read",
     "employee:create",
     "department:read",
+    "department:read-all",
     "project:read",
     "project:manage",
     "task:read",
@@ -65,7 +73,10 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
     "ticket:manage",
     "daily-update:submit",
     "report:project",
+    "client:read",
+    "client:update",
   ],
+  SALES_EXECUTIVE: ["department:read", "department:read-all", "project:read", "daily-update:submit", "client:read", "client:create", "client:update", "project:handover"],
   DEPARTMENT_HEAD: [
     "employee:read",
     "employee:create",
@@ -81,6 +92,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
     "ticket:create",
     "daily-update:submit",
     "report:department",
+    "client:read",
   ],
   TEAM_LEADER: [
     "employee:read",
@@ -91,6 +103,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
     "task:update-status",
     "ticket:create",
     "daily-update:submit",
+    "client:read",
   ],
   EMPLOYEE: [
     "department:read",
@@ -99,12 +112,33 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
     "task:update-status",
     "ticket:create",
     "daily-update:submit",
+    "client:read",
   ],
 };
 
+declare global {
+  var __rolePerms: Partial<Record<RoleKey, readonly Permission[]>> | undefined;
+}
+
+/**
+ * Permissions a Super Admin can never hand to another role, nor take from Super Admin. Settings and the
+ * audit log stay Super Admin only, and the Super Admin column is fixed so nobody can be locked out.
+ */
+export const LOCKED_PERMISSIONS: readonly Permission[] = ["settings:manage", "audit:read"];
+
+/** What a role may do right now: the Super Admin's edits (loaded from the database) over the defaults above. */
+export function effectivePermissions(role: RoleKey): readonly Permission[] {
+  return globalThis.__rolePerms?.[role] ?? ROLE_PERMISSIONS[role] ?? [];
+}
+
+/** Installs the effective permissions (server: loaded from MongoDB; browser: the signed-in user's own role). */
+export function setRuntimePermissions(map: Partial<Record<RoleKey, readonly Permission[]>>): void {
+  globalThis.__rolePerms = { ...globalThis.__rolePerms, ...map };
+}
+
 export function hasPermission(role: RoleKey | undefined | null, permission: Permission): boolean {
   if (!role) return false;
-  return ROLE_PERMISSIONS[role]?.includes(permission) ?? false;
+  return effectivePermissions(role).includes(permission);
 }
 
 /**
@@ -113,8 +147,9 @@ export function hasPermission(role: RoleKey | undefined | null, permission: Perm
  * Department Heads can only onboard Employees and Team Leaders into their own departments.
  */
 export const ASSIGNABLE_ROLES: Record<RoleKey, RoleKey[]> = {
-  SUPER_ADMIN: ["SUPER_ADMIN", "PROJECT_MANAGER", "DEPARTMENT_HEAD", "TEAM_LEADER", "EMPLOYEE"],
+  SUPER_ADMIN: ["SUPER_ADMIN", "PROJECT_MANAGER", "SALES_EXECUTIVE", "DEPARTMENT_HEAD", "TEAM_LEADER", "EMPLOYEE"],
   PROJECT_MANAGER: ["DEPARTMENT_HEAD", "TEAM_LEADER", "EMPLOYEE"],
+  SALES_EXECUTIVE: [],
   DEPARTMENT_HEAD: ["TEAM_LEADER", "EMPLOYEE"],
   TEAM_LEADER: [],
   EMPLOYEE: [],

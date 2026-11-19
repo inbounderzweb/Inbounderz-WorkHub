@@ -3,7 +3,11 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { format } from "date-fns";
-import { Check, History, Minus, Search, ShieldCheck } from "lucide-react";
+import { Check, History, Lock, Minus, Search, ShieldCheck } from "lucide-react";
+import { toast } from "sonner";
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -15,8 +19,9 @@ import { TableSkeleton } from "@/components/shared/skeletons";
 import { RoleBadge } from "@/components/shared/badges";
 import { UserAvatar } from "@/components/shared/user-avatar";
 import { useDebounce } from "@/hooks/use-debounce";
-import { fetcher, qs } from "@/lib/http";
-import { PERMISSIONS, type Permission } from "@/lib/permissions";
+import { api, fetcher, qs } from "@/lib/http";
+import { cn } from "@/lib/utils";
+import { LOCKED_PERMISSIONS, PERMISSIONS, type Permission } from "@/lib/permissions";
 import type { RoleKey } from "@/lib/constants";
 import type { ActivityDTO, Paginated } from "@/types/dto";
 
@@ -29,21 +34,43 @@ type RoleOverview = {
   permissions: { key: Permission; label: string }[];
   users: number;
   activeUsers: number;
+  editable: boolean;
 };
+
+type Pending = { role: RoleOverview; permission: Permission; allowed: boolean };
 
 const GROUPS: { label: string; prefix: string[] }[] = [
   { label: "Employees", prefix: ["employee:"] },
   { label: "Departments", prefix: ["department:"] },
   { label: "Projects & tasks", prefix: ["project:", "task:", "ticket:", "daily-update:"] },
+  { label: "Clients", prefix: ["client:"] },
   { label: "Reports & system", prefix: ["report:", "audit:", "settings:"] },
 ];
 
 function RolesPanel() {
   const { data, error, isLoading, mutate } = useSWR<RoleOverview[]>("/api/roles", fetcher);
+  const [pending, setPending] = useState<Pending | null>(null);
+  const [saving, setSaving] = useState(false);
   if (error) return <ErrorState message={error.message} onRetry={() => mutate()} />;
   if (isLoading || !data) return <TableSkeleton rows={8} cols={6} />;
 
   const allPerms = Object.keys(PERMISSIONS) as Permission[];
+
+  async function apply() {
+    if (!pending) return;
+    setSaving(true);
+    try {
+      await api("/api/roles/permissions", { method: "PATCH", body: { role: pending.role.key, permission: pending.permission, allowed: pending.allowed } });
+      await mutate();
+      toast.success(`${pending.allowed ? "Granted" : "Revoked"} "${PERMISSIONS[pending.permission]}" ${pending.allowed ? "to" : "from"} ${pending.role.name}`);
+      setPending(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't change the permission");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
@@ -56,34 +83,58 @@ function RolesPanel() {
           </div>
         ))}
       </div>
-      <div className="overflow-hidden rounded-xl border bg-card shadow-xs">
+      {/* overflow-clip (not hidden/auto) keeps the rounded corners without creating a scroll container, so the header row can stick to the page. */}
+      <div className="overflow-clip rounded-xl border bg-card shadow-xs">
         <div className="border-b px-4 py-3">
           <p className="text-sm font-semibold">Permission matrix</p>
-          <p className="text-xs text-muted-foreground">Enforced on the server for every request. Defined in code and synced to the roles collection.</p>
+          <p className="text-xs text-muted-foreground">Enforced on the server for every request. Click a cell to grant or revoke a permission; you&rsquo;ll be asked to confirm. Super Admin and the settings/audit permissions are fixed.</p>
         </div>
-        <div className="overflow-x-auto">
-          <Table>
+        <div>
+          {/* Plain <table>: the shared Table wraps itself in an overflow container, which would stop the header sticking. */}
+          <table className="w-full caption-bottom text-sm">
             <TableHeader>
-              <TableRow className="bg-muted/40 hover:bg-muted/40">
-                <TableHead className="min-w-64 pl-4">Permission</TableHead>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="sticky top-16 z-10 min-w-64 bg-muted pl-4">Permission</TableHead>
                 {data.map((r) => (
-                  <TableHead key={r.key} className="text-center whitespace-nowrap">{r.name}</TableHead>
+                  <TableHead key={r.key} className="sticky top-16 z-10 bg-muted text-center whitespace-nowrap">{r.name}</TableHead>
                 ))}
               </TableRow>
             </TableHeader>
             <TableBody>
               {GROUPS.map((g) => (
-                <GroupRows key={g.label} label={g.label} perms={allPerms.filter((p) => g.prefix.some((x) => p.startsWith(x)))} roles={data} />
+                <GroupRows key={g.label} label={g.label} perms={allPerms.filter((p) => g.prefix.some((x) => p.startsWith(x)))} roles={data} onToggle={(role, permission, allowed) => setPending({ role, permission, allowed })} />
               ))}
             </TableBody>
-          </Table>
+          </table>
         </div>
       </div>
+      <AlertDialog open={!!pending} onOpenChange={(o) => !o && !saving && setPending(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{pending?.allowed ? "Grant this permission?" : "Revoke this permission?"}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pending ? (
+                <>
+                  Every <strong>{pending.role.name}</strong> ({pending.role.activeUsers} active {pending.role.activeUsers === 1 ? "user" : "users"}) will {pending.allowed ? "be able to" : "no longer be able to"}{" "}
+                  <strong>{PERMISSIONS[pending.permission].toLowerCase()}</strong> <span className="font-mono text-xs">({pending.permission})</span>. It takes effect on their next request and is recorded in the audit log.
+                </>
+              ) : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
+            <Button variant={pending?.allowed ? "default" : "destructive"} onClick={apply} disabled={saving}>
+              {saving ? <Spinner /> : null}
+              {pending?.allowed ? "Grant access" : "Revoke access"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
 
-function GroupRows({ label, perms, roles }: { label: string; perms: Permission[]; roles: RoleOverview[] }) {
+function GroupRows({ label, perms, roles, onToggle }: { label: string; perms: Permission[]; roles: RoleOverview[]; onToggle: (role: RoleOverview, permission: Permission, allowed: boolean) => void }) {
   return (
     <>
       <TableRow className="bg-muted/20 hover:bg-muted/20">
@@ -97,15 +148,32 @@ function GroupRows({ label, perms, roles }: { label: string; perms: Permission[]
             <p className="text-sm">{PERMISSIONS[p]}</p>
             <p className="font-mono text-[11px] text-muted-foreground">{p}</p>
           </TableCell>
-          {roles.map((r) => (
-            <TableCell key={r.key} className="text-center">
-              {r.permissions.some((x) => x.key === p) ? (
-                <Check className="mx-auto size-4 text-primary" aria-label="Allowed" />
-              ) : (
-                <Minus className="mx-auto size-4 text-muted-foreground/40" aria-label="Not allowed" />
-              )}
-            </TableCell>
-          ))}
+          {roles.map((r) => {
+            const allowed = r.permissions.some((x) => x.key === p);
+            const locked = !r.editable || LOCKED_PERMISSIONS.includes(p);
+            const icon = allowed ? <Check className="size-4 text-primary" aria-hidden /> : <Minus className="size-4 text-muted-foreground/40" aria-hidden />;
+            return (
+              <TableCell key={r.key} className="text-center">
+                {locked ? (
+                  <span className="relative mx-auto flex size-8 items-center justify-center" title={r.editable ? "Reserved for Super Admin" : "Super Admin permissions are fixed"}>
+                    {icon}
+                    <span className="sr-only">{allowed ? "Allowed" : "Not allowed"} (fixed)</span>
+                    {!allowed && r.editable ? <Lock className="absolute -right-0.5 -bottom-0.5 size-2.5 text-muted-foreground/50" aria-hidden /> : null}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onToggle(r, p, !allowed)}
+                    className={cn("mx-auto flex size-8 items-center justify-center rounded-md transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none", allowed ? "hover:bg-primary/10" : "")}
+                    aria-label={`${allowed ? "Revoke" : "Grant"} ${PERMISSIONS[p]} ${allowed ? "from" : "to"} ${r.name}`}
+                    aria-pressed={allowed}
+                  >
+                    {icon}
+                  </button>
+                )}
+              </TableCell>
+            );
+          })}
         </TableRow>
       ))}
     </>
@@ -140,6 +208,7 @@ function AuditPanel() {
             <SelectItem value="Department">Departments</SelectItem>
             <SelectItem value="Project">Projects</SelectItem>
             <SelectItem value="Task">Tasks</SelectItem>
+            <SelectItem value="Role">Roles & permissions</SelectItem>
           </SelectContent>
         </Select>
       </div>

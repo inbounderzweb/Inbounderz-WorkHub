@@ -2,7 +2,7 @@ import "server-only";
 import type { Types } from "mongoose";
 import { connectDB } from "./db";
 import { ROLE_KEYS, ROLE_META, type RoleKey } from "./constants";
-import { ROLE_PERMISSIONS } from "./permissions";
+import { ROLE_PERMISSIONS, PERMISSIONS, LOCKED_PERMISSIONS, type Permission } from "./permissions";
 import { Role } from "@/models";
 
 export type RoleInfo = { id: string; key: RoleKey; name: string; level: number };
@@ -17,8 +17,20 @@ declare global {
  * Upserts the system roles from the code-defined matrix so the database always
  * reflects the permissions the server enforces. Idempotent.
  */
+/** Code defaults plus the Super Admin's grants and revocations. Super Admin and locked permissions ignore edits. */
+export function computeEffective(key: RoleKey, granted: readonly string[] = [], revoked: readonly string[] = []): Permission[] {
+  if (key === "SUPER_ADMIN") return [...ROLE_PERMISSIONS[key]];
+  const known = (p: string): p is Permission => p in PERMISSIONS && !LOCKED_PERMISSIONS.includes(p as Permission);
+  const set = new Set<Permission>(ROLE_PERMISSIONS[key]);
+  for (const p of revoked) if (known(p)) set.delete(p);
+  for (const p of granted) if (known(p)) set.add(p);
+  return [...set];
+}
+
 export async function syncRoles(): Promise<void> {
   await connectDB();
+  const existing = await Role.find().select("key granted revoked").lean();
+  const edits = new Map(existing.map((r) => [r.key as RoleKey, r]));
   await Role.bulkWrite(
     ROLE_KEYS.map((key) => ({
       updateOne: {
@@ -28,7 +40,7 @@ export async function syncRoles(): Promise<void> {
             name: ROLE_META[key].name,
             description: ROLE_META[key].description,
             level: ROLE_META[key].level,
-            permissions: ROLE_PERMISSIONS[key],
+            permissions: computeEffective(key, edits.get(key)?.granted, edits.get(key)?.revoked),
             isSystem: true,
           },
         },
@@ -68,7 +80,12 @@ function invalidateRoleMaps() {
 }
 
 export async function getRoleByKey(key: RoleKey): Promise<RoleInfo> {
-  const role = (await getRoleMaps()).byKey.get(key);
+  let role = (await getRoleMaps()).byKey.get(key);
+  if (!role) {
+    // A role added by a newer deployment: reload once, as getRoleById does.
+    invalidateRoleMaps();
+    role = (await getRoleMaps()).byKey.get(key);
+  }
   if (!role) throw new Error(`Role ${key} is not configured`);
   return role;
 }

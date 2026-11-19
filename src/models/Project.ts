@@ -1,5 +1,5 @@
 import { Schema, type InferSchemaType, type Types } from "mongoose";
-import { APPROVAL_MODES, PROJECT_STATUSES, TASK_PRIORITIES } from "@/lib/constants";
+import { APPROVAL_MODES, CURRENCIES, DEFAULT_CURRENCY, PROJECT_STATUSES, TASK_PRIORITIES } from "@/lib/constants";
 import { defineModel } from "./_helpers";
 
 /**
@@ -12,11 +12,20 @@ const ProjectSchema = new Schema(
     /** Project ID, generated automatically (PRJ-0001). */
     code: { type: String, required: true, trim: true, uppercase: true, maxlength: 20 },
     description: { type: String, trim: true, default: "", maxlength: 5000 },
+    /** Legacy free-text client name. Kept for history; `clientRef` is the source of truth once set. */
     client: { type: String, trim: true, default: "", maxlength: 150 },
+    /** The Client record. One client can have many projects. Null for projects not yet linked. */
+    clientRef: { type: Schema.Types.ObjectId, ref: "Client", default: null },
     status: { type: String, enum: PROJECT_STATUSES, default: "PLANNING" },
     priority: { type: String, enum: TASK_PRIORITIES, default: "MEDIUM" },
     departments: [{ type: Schema.Types.ObjectId, ref: "Department" }],
-    manager: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    /**
+     * The accountable PM. Null only while a project is in the handover states (DRAFT, HANDOVER_PENDING,
+     * PM_REJECTED): ownership is set when the nominated PM accepts, never by nomination alone.
+     */
+    manager: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    /** Currency of every amount on this project and its services. Amounts of different currencies are never mixed. */
+    currency: { type: String, enum: CURRENCIES, default: DEFAULT_CURRENCY },
     startDate: { type: Date, default: null },
     endDate: { type: Date, default: null },
     budget: { type: Number, min: 0, default: null },
@@ -40,6 +49,8 @@ ProjectSchema.index({ isArchived: 1, createdAt: -1 });
 ProjectSchema.index({ departments: 1, status: 1 });
 ProjectSchema.index({ manager: 1, status: 1 });
 ProjectSchema.index({ name: 1 });
+ProjectSchema.index({ clientRef: 1, createdAt: -1 });
+ProjectSchema.index({ createdBy: 1, status: 1 });
 
 export type ProjectDoc = InferSchemaType<typeof ProjectSchema> & { _id: Types.ObjectId };
 export const Project = defineModel("Project", ProjectSchema);

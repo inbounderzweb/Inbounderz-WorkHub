@@ -21,7 +21,7 @@ import { api, fetcher, qs } from "@/lib/http";
 import { handleFormError } from "@/lib/form";
 import { createTicketSchema, type CreateTicketInput } from "@/lib/validations/ticket";
 import { DeliverablesEditor } from "./deliverables-editor";
-import type { TicketDetailDTO, TicketDTO } from "@/types/dto";
+import type { TicketDetailDTO, TicketDTO, TicketProjectOptionDTO, TicketTaskOptionDTO } from "@/types/dto";
 
 function defaults(t?: TicketDetailDTO): CreateTicketInput {
   return {
@@ -34,6 +34,8 @@ function defaults(t?: TicketDetailDTO): CreateTicketInput {
     dueDate: t?.dueDate?.slice(0, 10) ?? "",
     suggestedEmployee: t?.suggestedEmployee?.id ?? "",
     projectManager: t?.projectManager?.id ?? "",
+    project: t?.project?.id ?? "",
+    task: t?.task?.id ?? "",
     referenceLinks: t?.referenceLinks ?? [],
     deliverables: t?.deliverables?.map((d) => ({ id: d.id, type: d.type, quantity: d.quantity, specifications: d.specifications })) ?? [],
     draft: false,
@@ -59,7 +61,7 @@ export function TicketFormDialog({
   const form = useForm<CreateTicketInput>({ resolver: zodResolver(createTicketSchema) as never, defaultValues: defaults(ticket) });
   const { register, handleSubmit, control, formState, reset, setError, setValue } = form;
   const e = formState.errors;
-  const [target, referenceLinks, extraDepartments] = useWatch({ control, name: ["targetDepartment", "referenceLinks", "additionalDepartments"] });
+  const [target, referenceLinks, extraDepartments, projectId] = useWatch({ control, name: ["targetDepartment", "referenceLinks", "additionalDepartments", "project"] });
   const extras = extraDepartments ?? [];
   const links = referenceLinks ?? [];
 
@@ -80,6 +82,14 @@ export function TicketFormDialog({
   if (ticket?.projectManager && !managerOptions.some((m) => m.id === ticket.projectManager!.id)) {
     managerOptions.push({ ...ticket.projectManager, employeeId: "" });
   }
+  const { data: projects, isLoading: projectsLoading } = useSWR<TicketProjectOptionDTO[]>(open ? "/api/tickets/work-links" : null, fetcher);
+  const { data: tasks, isLoading: tasksLoading } = useSWR<TicketTaskOptionDTO[]>(open && projectId ? `/api/tickets/work-links${qs({ project: projectId })}` : null, fetcher);
+  const projectOptions = [...(projects ?? [])];
+  if (ticket?.project && !projectOptions.some((p) => p.id === ticket.project!.id)) projectOptions.push(ticket.project);
+  const taskOptions = [...(tasks ?? [])];
+  if (ticket?.task && ticket.project?.id === projectId && !taskOptions.some((t) => t.id === ticket.task!.id)) taskOptions.push(ticket.task);
+  // Once a task has been created from this ticket it stays attached.
+  const workLocked = isEdit && !!ticket?.task?.autoCreated;
   const requesting = (allDepartments ?? []).find((d) => d.id === me.departmentId);
   const canChangeDept = !isEdit || ticket?.status === "DRAFT";
   const extraOptions = departments.filter((d) => d.id !== target && !extras.includes(d.id));
@@ -96,7 +106,7 @@ export function TicketFormDialog({
   }
 
   async function save(values: CreateTicketInput, draft: boolean) {
-    const body = { ...values, additionalDepartments: values.additionalDepartments ?? [], draft, projectManager: values.projectManager || null, suggestedEmployee: values.suggestedEmployee || null, dueDate: values.dueDate || null };
+    const body = { ...values, additionalDepartments: values.additionalDepartments ?? [], draft, projectManager: values.projectManager || null, suggestedEmployee: values.suggestedEmployee || null, dueDate: values.dueDate || null, project: values.project || null, task: values.task || null };
     try {
       if (isEdit) {
         const { draft: _d, ...rest } = body;
@@ -132,6 +142,38 @@ export function TicketFormDialog({
         <form id="ticket-form" onSubmit={handleSubmit((v) => save(v, false))} noValidate className="grid gap-4 sm:grid-cols-2">
           <FormRow label="Title" htmlFor="tk-title" required error={e.title?.message} className="sm:col-span-2">
             <Input id="tk-title" placeholder="e.g. Banner design for the Eid campaign" aria-invalid={!!e.title} {...register("title")} />
+          </FormRow>
+          <FormRow label="Project (optional)" htmlFor="tk-project" error={e.project?.message}
+            description={workLocked ? "A task was already created from this ticket." : "Pick the project this work is for."}>
+            <Controller control={control} name="project" render={({ field }) => (
+              <Select
+                value={field.value || "__none"}
+                onValueChange={(v) => { field.onChange(v === "__none" ? "" : v); setValue("task", ""); }}
+                disabled={workLocked || projectsLoading}
+              >
+                <SelectTrigger id="tk-project" className="w-full" aria-invalid={!!e.project}>
+                  <SelectValue placeholder={projectsLoading ? "Loading projects…" : "No project"} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none">No project</SelectItem>
+                  {projectOptions.map((p) => <SelectItem key={p.id} value={p.id}>{p.name} ({p.code})</SelectItem>)}
+                </SelectContent>
+              </Select>
+            )} />
+          </FormRow>
+          <FormRow label="Task" htmlFor="tk-task" error={e.task?.message}
+            description={projectId ? "Leave on “Create a task from this ticket” if no task exists yet." : "Choose a project first."}>
+            <Controller control={control} name="task" render={({ field }) => (
+              <Select value={field.value || "__new"} onValueChange={(v) => field.onChange(v === "__new" ? "" : v)} disabled={workLocked || !projectId || tasksLoading}>
+                <SelectTrigger id="tk-task" className="w-full" aria-invalid={!!e.task}>
+                  <SelectValue placeholder={!projectId ? "—" : tasksLoading ? "Loading tasks…" : "Create a task from this ticket"} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__new">{workLocked && ticket?.task ? `${ticket.task.taskNumber} · ${ticket.task.title}` : "Create a task from this ticket"}</SelectItem>
+                  {taskOptions.map((t) => <SelectItem key={t.id} value={t.id}>{t.taskNumber} · {t.title}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            )} />
           </FormRow>
           <FormRow label="Requesting department" htmlFor="tk-from" description="Filled in from your profile.">
             <Input id="tk-from" value={requesting?.name ?? (me.departmentId ? "…" : "—")} disabled />

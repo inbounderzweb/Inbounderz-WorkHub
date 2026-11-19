@@ -1,4 +1,4 @@
-import { Bell, Building2, CheckSquare, ClipboardCheck, FolderKanban, Gauge, LayoutDashboard, ListChecks, Settings, Ticket, UserCircle, Users, type LucideIcon } from "lucide-react";
+import { Bell, Briefcase, Building2, CheckSquare, ClipboardCheck, FolderKanban, Gauge, LayoutDashboard, ListChecks, Settings, Ticket, UserCircle, Users, type LucideIcon } from "lucide-react";
 import type { Permission } from "@/lib/permissions";
 
 export type NavItem = { href: string; label: string; icon: LucideIcon; permission?: Permission };
@@ -15,6 +15,7 @@ export const NAV: NavSection[] = [
       { href: "/my-tasks", label: "My Tasks", icon: CheckSquare, permission: "task:read" },
       { href: "/tickets", label: "Tickets", icon: Ticket, permission: "ticket:create" },
       { href: "/tickets/reviews", label: "Review queue", icon: ClipboardCheck, permission: "ticket:create" },
+      { href: "/clients", label: "Clients", icon: Briefcase, permission: "client:read" },
       { href: "/projects", label: "Projects", icon: FolderKanban, permission: "project:read" },
       { href: "/tasks", label: "All Tasks", icon: ListChecks, permission: "task:manage" },
     ],

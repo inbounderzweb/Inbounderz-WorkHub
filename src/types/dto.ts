@@ -226,6 +226,13 @@ export type AttachmentDTO = {
 
 export type ProjectDetailDTO = ProjectDTO & {
   notes: string;
+  currency: import("@/lib/constants").Currency;
+  /** The client this project is for, when it is linked to a Client record. */
+  clientRef: { id: string; clientCode: string; name: string } | null;
+  /** Null for projects that did not come through a Sales handover. */
+  handover: HandoverDTO | null;
+  /** Services confirmed for this project (from approved client requirements). */
+  services: ProjectServiceDTO[];
   members: ProjectMemberDTO[];
   formerMembers: ProjectMemberDTO[];
   milestones: MilestoneDTO[];
@@ -380,6 +387,9 @@ export type TaskDetailDTO = TaskListItemDTO & {
 
 export type TicketDTO = {
   projectManager: UserRef | null;
+  /** Project and task this ticket belongs to, when the requester linked one. */
+  project: { id: string; code: string; name: string } | null;
+  task: { id: string; taskNumber: string; title: string; autoCreated: boolean } | null;
   id: string;
   ticketNumber: string;
   title: string;
@@ -647,3 +657,178 @@ export type ReviewerOptionDTO = {
   designation: string;
   department: string;
 };
+
+/* ------------------------------------------------------------------ */
+/* Clients                                                             */
+/* ------------------------------------------------------------------ */
+
+export type AddressDTO = { line1: string; line2: string; city: string; state: string; postalCode: string; country: string };
+
+/**
+ * Fields marked "restricted" are only present when `viewLevel` is FULL. LIMITED and MINIMAL viewers
+ * receive a record without them (the keys are absent, not blank), so they cannot even tell they exist.
+ */
+export type ClientDTO = {
+  id: string;
+  clientCode: string;
+  name: string;
+  status: import("@/lib/constants").ClientStatus;
+  businessCategory: string;
+  website: string;
+  viewLevel: import("@/lib/constants").ClientViewLevel;
+  /** Present for FULL and LIMITED. */
+  contactPerson?: string;
+  salesOwner?: UserRef | null;
+  /** Project Manager asked to approve the onboarding. */
+  projectManager?: UserRef | null;
+  // Restricted (FULL only)
+  email?: string;
+  phone?: string;
+  contactDesignation?: string;
+  contactEmail?: string;
+  contactPhone?: string;
+  alternatePhone?: string;
+  alternateContact?: { name: string; email: string; phone: string };
+  businessAddress?: AddressDTO;
+  billingSameAsBusiness?: boolean;
+  billingAddress?: AddressDTO;
+  gst?: { gstin: string; legalName: string; stateCode: string; stateName: string };
+  defaultCurrency?: import("@/lib/constants").Currency;
+  notes?: string;
+  createdBy?: UserRef | null;
+  updatedBy?: UserRef | null;
+  createdAt?: string;
+  updatedAt?: string;
+  migratedFromProjects?: boolean;
+  /** What the signed-in user may do with this client. */
+  can?: { update: boolean; editRestricted: boolean; changeOwner: boolean; changeStatus: boolean; archive: boolean };
+  projectCount?: number;
+};
+
+export type ClientContactDTO = {
+  id: string;
+  name: string;
+  designation: string;
+  email: string;
+  phone: string;
+  notes: string;
+  createdAt: string;
+};
+
+export type ClientHistoryDTO = {
+  id: string;
+  action: import("@/lib/constants").ClientHistoryAction;
+  actor: UserRef | null;
+  summary: string;
+  reason: string;
+  changes: Record<string, { from: unknown; to: unknown }> | null;
+  createdAt: string;
+};
+
+export type ClientProjectDTO = {
+  id: string;
+  code: string;
+  name: string;
+  status: ProjectStatus;
+  manager: UserRef | null;
+  startDate: string | null;
+  endDate: string | null;
+};
+
+/** What a duplicate warning reveals about an existing client: enough to recognise it, no contact data. */
+export type DuplicateMatchDTO = {
+  id: string;
+  clientCode: string;
+  name: string;
+  status: import("@/lib/constants").ClientStatus;
+  salesOwner: UserRef | null;
+  level: "BLOCK" | "CONTACT" | "NAME";
+  matched: ("email" | "phone" | "name")[];
+  score: number;
+  /** Whether the viewer may open the existing record. */
+  canOpen: boolean;
+};
+
+export type DuplicateReviewDTO = {
+  id: string;
+  clientA: { id: string; clientCode: string; name: string; status: import("@/lib/constants").ClientStatus } | null;
+  clientB: { id: string; clientCode: string; name: string; status: import("@/lib/constants").ClientStatus } | null;
+  source: import("@/lib/constants").DuplicateReviewSource;
+  score: number;
+  reasons: string[];
+  status: import("@/lib/constants").DuplicateReviewStatus;
+  resolutionNote: string;
+  resolvedBy: UserRef | null;
+  resolvedAt: string | null;
+  createdAt: string;
+};
+
+/* ------------------------------------------------------------------ */
+/* Service requirements and project handover                           */
+/* ------------------------------------------------------------------ */
+
+export type RequirementDTO = {
+  id: string;
+  clientId: string;
+  serviceType: import("@/lib/constants").ServiceType;
+  status: import("@/lib/constants").RequirementStatus;
+  /** Validated per service type; see lib/clients/service-requirements.ts. */
+  config: Record<string, unknown>;
+  summary: string;
+  currency: import("@/lib/constants").Currency;
+  proposedBudget: number | null;
+  adSpend: number | null;
+  agencyFee: number | null;
+  createdBy: UserRef | null;
+  updatedBy: UserRef | null;
+  createdAt: string;
+  updatedAt: string;
+  /** The live project this requirement was converted into, if any. A linked requirement is locked. */
+  linkedProject: { id: string; code: string; name: string; status: ProjectStatus } | null;
+  can: { edit: boolean; remove: boolean };
+};
+
+export type ProjectServiceDTO = {
+  id: string;
+  requirementId: string;
+  serviceType: import("@/lib/constants").ServiceType;
+  confirmedScope: string;
+  deliverables: { id: string; type: string; quantity: number; specifications: string; completedQuantity: number; verifiedQuantity: number }[];
+  currency: import("@/lib/constants").Currency;
+  /** Null for viewers without financial access, and for amounts that were never set. */
+  approvedBudget: number | null;
+  agencyFee: number | null;
+  adSpend: number | null;
+  estimatedHours: number | null;
+  startDate: string | null;
+  endDate: string | null;
+  status: import("@/lib/constants").ProjectServiceStatus;
+  /** What Sales had collected when the service was confirmed. */
+  requirementSummary: string;
+};
+
+export type HandoverDTO = {
+  assignmentId: string;
+  status: import("@/lib/constants").PmAssignmentStatus;
+  sequence: number;
+  primaryPm: UserRef | null;
+  supportingPms: UserRef[];
+  coordinator: UserRef | null;
+  handoverNotes: string;
+  proposedHandoverDate: string | null;
+  nominatedBy: UserRef | null;
+  submittedAt: string | null;
+  respondedAt: string | null;
+  respondedBy: UserRef | null;
+  rejectionReason: string;
+  history: { at: string; actor: UserRef | null; action: string; note: string }[];
+  /** Earlier nominations of this project (rejected or replaced), newest first. */
+  previous: { primaryPm: UserRef | null; status: import("@/lib/constants").PmAssignmentStatus; rejectionReason: string; respondedAt: string | null }[];
+  can: { respond: boolean; submit: boolean; nominate: boolean; revise: boolean };
+};
+
+export type PmOptionDTO = { id: string; name: string; avatarUrl: string | null; email: string; employeeId: string };
+
+/** Choices for the "Project / Task" fields when raising a ticket. */
+export type TicketProjectOptionDTO = { id: string; code: string; name: string };
+export type TicketTaskOptionDTO = { id: string; taskNumber: string; title: string };

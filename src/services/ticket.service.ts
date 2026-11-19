@@ -37,6 +37,7 @@ import type {
 } from "@/lib/validations/ticket";
 import { listAttachments } from "./attachment.service";
 import { accumulateLoads, finalizeLoad, loadSettings, periodCapacity } from "./workload.service";
+import { cancelAutoTicketTask, ensureTicketTask, resolveWorkLink } from "./ticket-task.service";
 import { appendToQueue, ensureRanked, queuePositions, reorderAuthority } from "./ticket-queue.service";
 import { iso, toDepartmentRef, toUserRef, DEPT_REF_FIELDS, USER_REF_FIELDS } from "./mappers";
 import { oid, type Filter } from "./scope";
@@ -425,6 +426,8 @@ const POPULATE = (q: any) =>
     .populate("additionalDepartments", DEPT_REF_FIELDS)
     .populate("createdBy", USER_REF_FIELDS)
     .populate("projectManager", USER_REF_FIELDS)
+    .populate("project", "name code")
+    .populate("task", "taskNumber title")
     .populate("assignedReviewer", USER_REF_FIELDS)
     .populate("assignee", USER_REF_FIELDS);
 
@@ -441,6 +444,8 @@ function toDTO(t: any): TicketDTO {
     additionalDepartments: (t.additionalDepartments ?? []).map(toDepartmentRef).filter(Boolean) as TicketDTO["additionalDepartments"],
     createdBy: toUserRef(t.createdBy),
     projectManager: toUserRef(t.projectManager),
+    project: t.project?._id ? { id: t.project._id.toString(), code: t.project.code, name: t.project.name } : null,
+    task: t.task?._id ? { id: t.task._id.toString(), taskNumber: t.task.taskNumber, title: t.task.title, autoCreated: !!t.taskAutoCreated } : null,
     assignedReviewer: toUserRef(t.assignedReviewer),
     reviewStatus: (t.reviewStatus ?? "NONE") as TicketDTO["reviewStatus"],
     assignee: toUserRef(t.assignee),
@@ -600,8 +605,11 @@ export async function createTicket(user: CurrentUser, input: CreateInput): Promi
   if (input.projectManager) await assertTicketManager(input.projectManager, user.id);
   if (input.suggestedEmployee) await assertSuggestion(input.suggestedEmployee, input.targetDepartment);
 
+  const work = await resolveWorkLink(user, input.project, input.task);
   const status: TicketStatus = input.draft ? "DRAFT" : "PENDING_APPROVAL";
   const ticket = await Ticket.create({
+    project: work.project ? oid(work.project) : null,
+    task: work.task ? oid(work.task) : null,
     ticketNumber: `TKT-${String(await nextSequence("ticketNumber")).padStart(5, "0")}`,
     title: input.title,
     description: input.description,
@@ -620,6 +628,7 @@ export async function createTicket(user: CurrentUser, input: CreateInput): Promi
   });
   await log(ticket, user.id, "CREATED", { toStatus: status, message: input.draft ? "Saved as draft" : `Raised to ${target.name}` });
   if (!input.draft) {
+    await ensureTicketTask(ticket, user);
     await announceSubmission(ticket, user);
     await announceInvolvement(ticket, extra, user);
   }
@@ -680,6 +689,12 @@ export async function updateTicket(user: CurrentUser, id: string, input: UpdateI
     assertDeliverables(errors);
     deliverableChanges = describeDeliverableChanges(current, next);
     if (deliverableChanges.length) set.deliverables = toStored(next);
+  }
+  if (input.project !== undefined || input.task !== undefined) {
+    if (ticket.task && ticket.taskAutoCreated) throw unprocessable("A task was already created from this ticket, so its project can't change", { project: "Locked" });
+    const work = await resolveWorkLink(user, input.project === undefined ? s(ticket.project) : input.project, input.task === undefined ? (input.project !== undefined ? null : s(ticket.task)) : input.task);
+    set.project = work.project ? oid(work.project) : null;
+    set.task = work.task ? oid(work.task) : null;
   }
   const managerChanged = input.projectManager !== undefined && s(input.projectManager) !== s(ticket.projectManager);
   if (managerChanged) {
@@ -763,6 +778,7 @@ export async function ticketAction(user: CurrentUser, id: string, input: ActionI
       need(can.submit);
       await move(ticket, ["DRAFT"], { status: "PENDING_APPROVAL" });
       await log(base, user.id, "SUBMITTED", { fromStatus: from, toStatus: "PENDING_APPROVAL" });
+      await ensureTicketTask(ticket, user);
       await announceSubmission(ticket, user);
       return;
     }
@@ -795,6 +811,7 @@ export async function ticketAction(user: CurrentUser, id: string, input: ActionI
       need(can.triage);
       await move(ticket, ["PENDING_APPROVAL", "UNDER_REVIEW"], { status: "REJECTED", decisionReason: input.message, reviewedBy: oid(user.id) });
       await log(base, user.id, "REJECTED", { fromStatus: from, toStatus: "REJECTED", message: input.message });
+      await cancelAutoTicketTask(ticket, user, "was rejected");
       await note({ recipients: [ticket.createdBy], title: "Ticket rejected", message: `${ticket.ticketNumber}: ${input.message}` });
       return;
     }
@@ -1073,6 +1090,7 @@ export async function ticketAction(user: CurrentUser, id: string, input: ActionI
       const tm = timerStop(ticket, "AUTO", "Ticket cancelled");
       await move(ticket, [from], { status: "CANCELLED", decisionReason: input.message, ...tm.set }, tm.push.timeLog ? tm.push : undefined);
       await log(base, user.id, "CANCELLED", { fromStatus: from, toStatus: "CANCELLED", message: input.message });
+      await cancelAutoTicketTask(ticket, user, "was cancelled");
       await note({ recipients: [ticket.createdBy, ticket.assignee, ...(from === "PENDING_APPROVAL" || from === "UNDER_REVIEW" ? await triageWho() : [])], title: "Ticket cancelled", message: `${ticket.ticketNumber} · ${ticket.title}` });
       return;
     }

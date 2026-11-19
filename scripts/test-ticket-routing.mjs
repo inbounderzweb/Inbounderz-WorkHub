@@ -117,7 +117,7 @@ async function main() {
       assert.equal(t.approvedBy.id, actors.managerB.id); assert.equal(t.projectManager.id, actors.managerB.id);
       expect(await api(actors.requester, `/tickets/${ticket.id}`, "PATCH", { projectManager: actors.managerA.id }), 403);
     });
-    await check("My Tasks includes an Assigned tickets tab for users without project tasks", async () => {
+    await check("My Tasks selects Active tickets for users without project tasks and keeps completed tickets separate", async () => {
       const assigned = expect(await api(actors.worker, "/tickets?scope=assigned"));
       assert.ok(assigned.items.some((t) => t.id === ticket.id));
       const tasks = expect(await api(actors.worker, "/tasks?scope=mine"));
@@ -125,8 +125,9 @@ async function main() {
       const response = await fetch(`${base}/my-tasks`, { headers: { Cookie: actors.worker.cookie } });
       assert.equal(response.status, 200);
       const html = await response.text();
-      assert.match(html, /Assigned tickets/);
-      assert.match(html, /aria-selected="true"[^>]*>Assigned tickets/);
+      assert.match(html, /Active tickets/);
+      assert.match(html, /aria-selected="true"[^>]*>Active tickets/);
+      assert.match(html, /Completed tickets/);
     });
     await check("On Hold tickets remain visible in the assignee's personal work", async () => {
       expect(await action(actors.worker, ticket.id, { action: "start" }));

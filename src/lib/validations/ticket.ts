@@ -30,6 +30,9 @@ const ticketFields = {
   dueDate: optionalDateString,
   suggestedEmployee: optionalObjectId,
   projectManager: optionalObjectId,
+  /** Optional work context. With a project but no task, a task is created from the ticket on submission. */
+  project: optionalObjectId,
+  task: optionalObjectId,
   referenceLinks: z.array(link).max(10),
   deliverables,
 };

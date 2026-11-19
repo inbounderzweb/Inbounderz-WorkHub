@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Controller, useForm } from "react-hook-form";
+import { useMemo, useState } from "react";
+import { Controller, useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import useSWR from "swr";
 import { toast } from "sonner";
@@ -21,6 +21,7 @@ import { useCurrentUser } from "@/components/providers/user-provider";
 import { useDepartmentOptions, useEmployeeOptions } from "@/hooks/use-options";
 import { createProjectSchema, type CreateProjectInput } from "@/lib/validations/project";
 import { APPROVAL_MODE_LABELS, APPROVAL_MODES, PROJECT_STATUSES, TASK_PRIORITIES, humanize } from "@/lib/constants";
+import { statusEditError } from "@/lib/handover";
 import { api, fetcher, qs } from "@/lib/http";
 import { handleFormError } from "@/lib/form";
 import { cn } from "@/lib/utils";
@@ -130,7 +131,7 @@ function DepartmentAllocation({
   );
 }
 
-export function ProjectFormDialog({
+function ProjectFormContents({
   open,
   onOpenChange,
   project,
@@ -150,23 +151,13 @@ export function ProjectFormDialog({
     resolver: zodResolver(createProjectSchema) as never,
     defaultValues: defaults(project, me.role === "PROJECT_MANAGER" ? me.id : ""),
   });
-  const { register, handleSubmit, control, formState, reset, setError, watch, setValue, trigger, getValues } = form;
+  const { register, handleSubmit, control, formState, setError, setValue, trigger, getValues } = form;
   const e = formState.errors;
-
-  useEffect(() => {
-    if (open) {
-      reset(defaults(project, me.role === "PROJECT_MANAGER" ? me.id : ""));
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset wizard state on open
-      setStep(0);
-      setFilter("");
-    }
-  }, [open, project, reset, me.role, me.id]);
 
   const { data: departments } = useDepartmentOptions(open);
   const { data: pms } = useEmployeeOptions({ role: "PROJECT_MANAGER", status: "ACTIVE" }, open && me.role === "SUPER_ADMIN");
-  const selectedDepts = watch("departments") ?? [];
-  const members = (watch("members") ?? []) as Member[];
-  const managerId = watch("manager");
+  const [selectedDepts = [], watchedMembers = [], managerId] = useWatch({ control, name: ["departments", "members", "manager"] });
+  const members = watchedMembers as Member[];
   const activeDepts = useMemo(() => (departments ?? []).filter((d) => d.status === "ACTIVE"), [departments]);
 
   function toggleDept(id: string) {
@@ -275,7 +266,7 @@ export function ProjectFormDialog({
         <Controller control={control} name="status" render={({ field }) => (
           <Select value={field.value} onValueChange={field.onChange}>
             <SelectTrigger id="p-status" className="w-full"><SelectValue /></SelectTrigger>
-            <SelectContent>{PROJECT_STATUSES.map((p) => <SelectItem key={p} value={p}>{humanize(p)}</SelectItem>)}</SelectContent>
+            <SelectContent>{PROJECT_STATUSES.filter((status) => project ? !statusEditError(project.status, status) : !["DRAFT", "HANDOVER_PENDING", "PM_ACCEPTED", "PM_REJECTED"].includes(status)).map((p) => <SelectItem key={p} value={p}>{humanize(p)}</SelectItem>)}</SelectContent>
           </Select>
         )} />
       </FormRow>
@@ -349,7 +340,7 @@ export function ProjectFormDialog({
     </div>
   );
 
-  const values = watch();
+  const values = useWatch({ control });
   const review = (
     <div className="space-y-4 text-sm">
       <dl className="grid gap-x-6 gap-y-3 rounded-lg border p-4 sm:grid-cols-2">
@@ -427,4 +418,9 @@ export function ProjectFormDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/** Reset the wizard by mounting a fresh editing session for each opening. */
+export function ProjectFormDialog(props: React.ComponentProps<typeof ProjectFormContents>) {
+  return props.open ? <ProjectFormContents {...props} /> : null;
 }

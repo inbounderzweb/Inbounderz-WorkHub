@@ -4,7 +4,9 @@ export class ApiClientError extends Error {
   constructor(
     public status: number,
     message: string,
-    public fieldErrors?: Record<string, string>
+    public fieldErrors?: Record<string, string>,
+    /** Full JSON error body, for responses that carry more than a message (e.g. duplicate candidates). */
+    public data?: Record<string, unknown>
   ) {
     super(message);
   }
@@ -32,7 +34,8 @@ export async function api<T = unknown>(url: string, opts: Options = {}): Promise
     throw new ApiClientError(
       res.status,
       data?.error ?? `Request failed (${res.status})`,
-      data?.fieldErrors ?? undefined
+      data?.fieldErrors ?? undefined,
+      data ?? undefined
     );
   }
   return data as T;

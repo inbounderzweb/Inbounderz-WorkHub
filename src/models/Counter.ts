@@ -13,7 +13,7 @@ export async function nextSequence(name: string): Promise<number> {
   const doc = await Counter.findOneAndUpdate(
     { _id: name },
     { $inc: { seq: 1 } },
-    { upsert: true, new: true }
+    { upsert: true, returnDocument: "after" }
   ).lean();
   return doc!.seq;
 }

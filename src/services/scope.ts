@@ -2,7 +2,7 @@ import "server-only";
 import { Types } from "mongoose";
 import type { CurrentUser } from "@/lib/auth/current-user";
 import { Department } from "@/models";
-
+import { hasPermission } from "@/lib/permissions";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Filter = Record<string, any>;
 
@@ -26,10 +26,9 @@ export async function ledDepartmentIds(userId: string): Promise<Types.ObjectId[]
  * `null` means "all departments".
  */
 export async function visibleDepartmentIds(user: CurrentUser): Promise<Types.ObjectId[] | null> {
+  // "See every department" is a permission (editable in Settings), so granting it to any role widens the list.
+  if (hasPermission(user.role, "department:read-all")) return null;
   switch (user.role) {
-    case "SUPER_ADMIN":
-    case "PROJECT_MANAGER":
-      return null;
     case "DEPARTMENT_HEAD": {
       const ids = await headedDepartmentIds(user.id);
       if (user.departmentId) ids.push(oid(user.departmentId));

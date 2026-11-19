@@ -16,7 +16,16 @@
     "test:deliverables-rules": "tsx scripts/test-deliverables-rules.ts",
     "seed": "tsx --conditions=react-server scripts/seed.ts",
     "seed:demo": "tsx --conditions=react-server scripts/seed-demo.ts",
-    "db:dev": "tsx scripts/dev-db.ts"
+    "db:dev": "tsx scripts/dev-db.ts",
+    "db:health": "tsx --conditions=react-server scripts/db-health.ts",
+    "migrate:clients": "tsx --conditions=react-server scripts/migrate-clients.ts",
+    "test:clients-rules": "tsx scripts/test-clients-rules.ts",
+    "test:clients": "node scripts/test-clients.mjs",
+    "test:requirements-rules": "tsx scripts/test-requirements-rules.ts",
+    "test:handover": "node scripts/test-handover.mjs",
+    "test:onboarding-transactions": "tsx scripts/test-onboarding-transactions.ts",
+    "test:client-migration": "node scripts/test-client-migration.mjs",
+    "test:onboarding-ui": "node scripts/test-onboarding-ui.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^7.0.3",

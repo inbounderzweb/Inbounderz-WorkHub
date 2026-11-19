@@ -221,6 +221,14 @@ The matrix is defined in `src/lib/permissions.ts`, synced to the `roles` collect
 | Dashboard | Company | Managed projects | Department | Team | Personal |
 | Settings / audit log | ✓ | — | — | — | — |
 
+**Clients** (Sales Executive is a sixth role, created by Super Admins; it owns clients and can read their linked projects):
+
+| | Super Admin | Sales Executive | Project Manager | Dept Head / Team Leader | Employee |
+| --- | --- | --- | --- | --- | --- |
+| Which clients | All | Own | Of projects they manage / sit on | Of projects visible to them | Of projects they work on |
+| Detail | Full | Full | Full (incl. GST, billing, history) | Name, category, website, contact person | Name, category, website |
+| Edit | All, incl. owner, archive, duplicate override | All of own, incl. GST/billing; not owner or archive | Contacts, addresses, notes; **not** GST, billing, currency, owner, status | — | — |
+
 Safeguards:
 
 - Nobody can change their own role or status.
@@ -245,3 +253,51 @@ Safeguards:
 - **Password-reset email delivery is not wired up yet.** The reset link is written to the server log. Plug a mail provider into `src/app/api/account/forgot-password/route.ts`. In the meantime, a Super Admin can reset any employee's password from that employee's profile.
 - Internal tickets (Day 2) and Daily Updates have no screens yet. The dashboards' ticket panels say so instead of showing numbers.
 - Attachments use local-disk storage. Switch the storage driver before deploying to serverless hosting.
+
+## Database requirements and verification
+
+Multi-document writes (client + history + duplicate review, project hand-over and so on) run in MongoDB
+**transactions**, which need a **replica set** (Atlas clusters always are one). A standalone `mongod` has no
+transactions: in development the app warns once and runs without atomicity; in production
+`withTransaction()` ([src/lib/transaction.ts](src/lib/transaction.ts)) throws instead of silently running
+non-atomically.
+
+Verify any deployment without exposing credentials:
+
+```bash
+MONGODB_URI="<target>" npm run db:health                          # prints topology, version and a transaction probe
+MONGODB_URI="<target>" npm run db:health -- --require-transactions   # exit code 1 if unsupported (deploy gate)
+```
+
+The probe's output never contains hosts, users or the connection string. A signed-in Admin can also call
+`GET /api/health/db`. Record the production result here when verified:
+
+| Environment | Verified | Topology | Transactions | Date |
+|---|---|---|---|---|
+| Production | not yet verified | | | |
+
+Local development with transactions: `npm run db:dev` starts a single-node replica set (`rs0`) on port 27017,
+using `MONGODB_URI=mongodb://127.0.0.1:27017/hr_portal?replicaSet=rs0&directConnection=true`. **Back up first**
+(`mongodump --uri=... --out ~/mongo-backups/<name>`); an existing standalone data directory is converted in place.
+
+## Client migration
+
+`npm run migrate:clients` turns the free-text `Project.client` values into Client records. It is a dry run unless
+`--apply --confirm-backup` is passed, is idempotent, never merges clients (similar names go to the Admin's
+duplicate-review queue) and is reversible with `--revert --apply`. See the header of
+[scripts/migrate-clients.ts](scripts/migrate-clients.ts).
+
+## Sales onboarding verification
+
+The [continuation audit](docs/sales-onboarding-continuation.md) records the original implementation,
+changes, test evidence, API behavior, and deployment limitations. Requirements are pre-sales records;
+only selected approved requirements become confirmed project services. Nomination does not assign
+ownership: the primary Project Manager must explicitly accept the handover.
+
+Additional verification commands:
+
+```bash
+npm run test:onboarding-transactions  # disposable MongoDB replica set; includes rollback injection
+npm run test:client-migration         # disposable replica set; dry-run/apply/idempotency/revert
+npm run test:onboarding-ui            # local running app + matching test DB + Playwright required
+```

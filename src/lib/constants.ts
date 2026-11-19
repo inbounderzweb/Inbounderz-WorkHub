@@ -6,6 +6,7 @@
 export const ROLE_KEYS = [
   "SUPER_ADMIN",
   "PROJECT_MANAGER",
+  "SALES_EXECUTIVE",
   "DEPARTMENT_HEAD",
   "TEAM_LEADER",
   "EMPLOYEE",
@@ -25,6 +26,11 @@ export const ROLE_META: Record<
     name: "Project Manager",
     level: 80,
     description: "Manages authorized projects, teams, tasks and tickets.",
+  },
+  SALES_EXECUTIVE: {
+    name: "Sales Executive",
+    level: 50,
+    description: "Owns clients and prepares project proposals for hand-over.",
   },
   DEPARTMENT_HEAD: {
     name: "Department Head",
@@ -50,6 +56,11 @@ export const DEPARTMENT_STATUSES = ["ACTIVE", "ARCHIVED"] as const;
 export type DepartmentStatus = (typeof DEPARTMENT_STATUSES)[number];
 
 export const PROJECT_STATUSES = [
+  // Sales-to-delivery handover. A project in these states has no manager until a PM accepts it.
+  "DRAFT",
+  "HANDOVER_PENDING",
+  "PM_ACCEPTED",
+  "PM_REJECTED",
   "PLANNING",
   "ACTIVE",
   "ON_HOLD",
@@ -59,6 +70,8 @@ export const PROJECT_STATUSES = [
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 /** Statuses that count as "in flight" for dashboards and deletion guards. */
 export const OPEN_PROJECT_STATUSES: ProjectStatus[] = ["PLANNING", "ACTIVE", "ON_HOLD"];
+/** Statuses owned by the handover workflow: only the handover actions may move a project out of them. */
+export const HANDOVER_PROJECT_STATUSES: ProjectStatus[] = ["DRAFT", "HANDOVER_PENDING", "PM_REJECTED"];
 
 export const PROJECT_MEMBER_ROLES = [
   "MANAGER",
@@ -114,6 +127,7 @@ export const NOTIFICATION_TYPES = [
   "TASK",
   "TICKET",
   "REVIEW",
+  "CLIENT",
 ] as const;
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
@@ -222,3 +236,103 @@ export const DELIVERABLE_STATUS_LABELS: Record<DeliverableStatus, string> = {
 export const EMPLOYEE_CAPACITY_ITEMS = 5;
 export const EMPLOYEE_CAPACITY_HOURS = 40;
 export type Availability = "AVAILABLE" | "LIMITED" | "FULL";
+
+/* ------------------------------------------------------------------ */
+/* Clients                                                             */
+/* ------------------------------------------------------------------ */
+
+export const CLIENT_STATUSES = ["PROSPECT", "ACTIVE", "INACTIVE", "ARCHIVED"] as const;
+export type ClientStatus = (typeof CLIENT_STATUSES)[number];
+
+/** INR is the default; amounts are always stored with their own currency code, never mixed. */
+export const CURRENCIES = ["INR", "USD", "EUR", "GBP", "AED", "SGD", "AUD", "CAD"] as const;
+export type Currency = (typeof CURRENCIES)[number];
+export const DEFAULT_CURRENCY: Currency = "INR";
+
+export const BUSINESS_CATEGORIES = [
+  "Retail & E-commerce",
+  "Real Estate",
+  "Healthcare",
+  "Education",
+  "Hospitality & Travel",
+  "Food & Beverage",
+  "Manufacturing",
+  "Technology & Software",
+  "Financial Services",
+  "Media & Entertainment",
+  "Non-profit",
+  "Other",
+] as const;
+
+/**
+ * How much of a client record a user may see.
+ * FULL: everything, including GST, billing and internal notes.
+ * LIMITED: identity and contact person only (project-side leaders).
+ * MINIMAL: just enough to know who the work is for.
+ */
+export const CLIENT_VIEW_LEVELS = ["FULL", "LIMITED", "MINIMAL"] as const;
+export type ClientViewLevel = (typeof CLIENT_VIEW_LEVELS)[number];
+
+export const CLIENT_HISTORY_ACTIONS = [
+  "CREATED",
+  "UPDATED",
+  "STATUS_CHANGED",
+  "OWNER_CHANGED",
+  "CONTACT_ADDED",
+  "CONTACT_UPDATED",
+  "CONTACT_REMOVED",
+  "DUPLICATE_OVERRIDE",
+  "DUPLICATE_ACKNOWLEDGED",
+  "MIGRATED",
+  "REQUIREMENT_ADDED",
+  "REQUIREMENT_UPDATED",
+  "REQUIREMENT_STATUS_CHANGED",
+  "REQUIREMENT_REMOVED",
+  "PROJECT_HANDOVER",
+] as const;
+export type ClientHistoryAction = (typeof CLIENT_HISTORY_ACTIONS)[number];
+
+export const DUPLICATE_REVIEW_STATUSES = ["OPEN", "NOT_DUPLICATE", "CONFIRMED_DUPLICATE"] as const;
+export type DuplicateReviewStatus = (typeof DUPLICATE_REVIEW_STATUSES)[number];
+export const DUPLICATE_REVIEW_SOURCES = ["MIGRATION", "CREATE_WARNING", "CREATE_OVERRIDE"] as const;
+export type DuplicateReviewSource = (typeof DUPLICATE_REVIEW_SOURCES)[number];
+
+/** Names similar at or above this Dice score (0-1) raise a soft warning. */
+export const CLIENT_NAME_SIMILARITY_THRESHOLD = 0.78;
+export const MIGRATION_SOURCE_PROJECT_CLIENT = "project-client-string";
+
+/* ------------------------------------------------------------------ */
+/* Service requirements and project handover                           */
+/* ------------------------------------------------------------------ */
+
+export const SERVICE_TYPES = ["SMM", "SEM", "SEO", "WEBSITE", "VIDEO", "QUICK_WORK"] as const;
+export type ServiceType = (typeof SERVICE_TYPES)[number];
+export const SERVICE_LABELS: Record<ServiceType, string> = {
+  SMM: "Social Media Marketing (SMM)",
+  SEM: "Search Engine Marketing (SEM)",
+  SEO: "Search Engine Optimization (SEO)",
+  WEBSITE: "Website Development",
+  VIDEO: "Video Production",
+  QUICK_WORK: "Quick Work",
+};
+export const SERVICE_SHORT_LABELS: Record<ServiceType, string> = { SMM: "SMM", SEM: "SEM", SEO: "SEO", WEBSITE: "Website", VIDEO: "Video", QUICK_WORK: "Quick work" };
+
+/** A requirement is pre-sales information. Only APPROVED requirements can be converted into project scope. */
+export const REQUIREMENT_STATUSES = ["INTERESTED", "REQUIREMENT_COLLECTED", "QUOTED", "APPROVED", "NOT_PROCEEDING"] as const;
+export type RequirementStatus = (typeof REQUIREMENT_STATUSES)[number];
+export const REQUIREMENT_STATUS_LABELS: Record<RequirementStatus, string> = {
+  INTERESTED: "Interested",
+  REQUIREMENT_COLLECTED: "Requirement collected",
+  QUOTED: "Quoted",
+  APPROVED: "Approved",
+  NOT_PROCEEDING: "Not proceeding",
+};
+
+/** Every nomination of a PM is one row. Exactly one row per project is "current". */
+export const PM_ASSIGNMENT_STATUSES = ["DRAFT", "PENDING", "ACCEPTED", "REJECTED", "SUPERSEDED"] as const;
+export type PmAssignmentStatus = (typeof PM_ASSIGNMENT_STATUSES)[number];
+
+export const PROJECT_SERVICE_STATUSES = ["PLANNED", "IN_PROGRESS", "COMPLETED", "CANCELLED"] as const;
+export type ProjectServiceStatus = (typeof PROJECT_SERVICE_STATUSES)[number];
+
+export const MIN_REJECTION_REASON = 10;

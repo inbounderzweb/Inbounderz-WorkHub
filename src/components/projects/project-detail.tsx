@@ -41,6 +41,7 @@ import { ProjectFormDialog } from "./project-form-dialog";
 import { ProjectMilestones } from "./project-milestones";
 import { ProjectTeam } from "./project-team";
 import { ProjectTimeline } from "./project-timeline";
+import { ProjectHandover } from "./project-handover";
 
 function ProjectActivity({ projectId }: { projectId: string }) {
   const [page, setPage] = useState(1);
@@ -129,6 +130,8 @@ export function ProjectDetail({ id }: { id: string }) {
           </div>
         </div>
       </section>
+
+      {p.handover ? <ProjectHandover key={p.handover.assignmentId} project={p} onChanged={() => mutate()} /> : null}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
         <div className="flex flex-col justify-between rounded-xl border bg-card p-4 shadow-xs sm:col-span-2">

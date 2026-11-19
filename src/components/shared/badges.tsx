@@ -6,6 +6,7 @@ const base = "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 t
 const ROLE_STYLES: Record<RoleKey, string> = {
   SUPER_ADMIN: "border-emerald-200 bg-emerald-50 text-emerald-800",
   PROJECT_MANAGER: "border-sky-200 bg-sky-50 text-sky-800",
+  SALES_EXECUTIVE: "border-rose-200 bg-rose-50 text-rose-800",
   DEPARTMENT_HEAD: "border-violet-200 bg-violet-50 text-violet-800",
   TEAM_LEADER: "border-amber-200 bg-amber-50 text-amber-800",
   EMPLOYEE: "border-slate-200 bg-slate-50 text-slate-700",
@@ -74,6 +75,10 @@ export function PriorityBadge({ priority }: { priority: TaskPriority }) {
 }
 
 const PROJECT_STATUS_STYLES: Record<ProjectStatus, string> = {
+  DRAFT: "border-slate-200 bg-white text-slate-600 border-dashed",
+  HANDOVER_PENDING: "border-amber-200 bg-amber-50 text-amber-700",
+  PM_ACCEPTED: "border-teal-200 bg-teal-50 text-teal-700",
+  PM_REJECTED: "border-rose-200 bg-rose-50 text-rose-700",
   PLANNING: "border-slate-200 bg-slate-50 text-slate-700",
   ACTIVE: "border-emerald-200 bg-emerald-50 text-emerald-700",
   ON_HOLD: "border-amber-200 bg-amber-50 text-amber-700",

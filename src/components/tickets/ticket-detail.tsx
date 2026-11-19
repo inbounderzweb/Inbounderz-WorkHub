@@ -413,6 +413,8 @@ export function TicketDetail({ id }: { id: string }) {
         <div className="space-y-6">
           <Panel title="Details" bodyClassName="divide-y">
             <Row label="Raised by">{t.createdBy ? <Person name={t.createdBy.name} /> : "—"}</Row>
+            <Row label="Project">{t.project ? <Link href={`/projects/${t.project.id}`} className="font-medium hover:underline">{t.project.name}</Link> : <span className="text-muted-foreground">None</span>}</Row>
+            {t.project ? <Row label="Task">{t.task ? <Link href={`/tasks/${t.task.id}`} className="font-medium hover:underline">{t.task.taskNumber} · {t.task.title}</Link> : <span className="text-muted-foreground">Created on submission</span>}</Row> : null}
             <Row label="Project Manager">{t.projectManager ? <Person name={t.projectManager.name} /> : "Department Project Managers"}</Row>
             <Row label="Assigned to">{t.assignee ? <Person name={t.assignee.name} /> : <span className="text-muted-foreground">Not assigned</span>}</Row>
             {t.assignee && t.assignedBy ? <Row label="Assigned by">{t.assignedBy.name}</Row> : null}

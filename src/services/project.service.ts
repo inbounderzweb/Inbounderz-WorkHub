@@ -2,9 +2,10 @@ import "server-only";
 import type { Types } from "mongoose";
 import type { z } from "zod";
 import type { CurrentUser } from "@/lib/auth/current-user";
-import { ApiError, conflict, escapeRegex, forbidden, notFound, paginate, unprocessable } from "@/lib/api";
+import { conflict, escapeRegex, forbidden, notFound, paginate, unprocessable } from "@/lib/api";
 import { diffFields, recordAudit } from "@/lib/audit";
 import { notify } from "@/lib/notify";
+import { statusEditError } from "@/lib/handover";
 import { hasPermission } from "@/lib/permissions";
 import { getRoleById } from "@/lib/roles";
 import {
@@ -25,7 +26,7 @@ import type {
   updateMilestoneSchema,
   updateProjectSchema,
 } from "@/lib/validations/project";
-import { AuditLog, Department, Milestone, nextSequence, Project, ProjectMember, Task, TaskActivity, User } from "@/models";
+import { AuditLog, Department, Milestone, Project, ProjectMember, Task, TaskActivity, User } from "@/models";
 import type {
   ActivityDTO,
   MilestoneDTO,
@@ -47,6 +48,8 @@ import { DEPT_REF_FIELDS, iso, toDepartmentRef, toUserRef, USER_REF_FIELDS } fro
 import { EMPTY_PROGRESS, progressFor } from "./progress.service";
 import { oid, type Filter } from "./scope";
 import { listAttachments } from "./attachment.service";
+import { loadHandoverView } from "./handover.service";
+import { generateProjectCode, syncManagerMembership } from "./project-core";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -81,14 +84,6 @@ async function loadManagedProject(user: CurrentUser, id: string, { allowArchived
   if (!canManageProject(ctx, project._id)) throw forbidden("Only the project's manager can do this");
   if (project.isArchived && !allowArchived) throw unprocessable("This project is archived. Unarchive it to make changes.");
   return { ctx, project };
-}
-
-async function generateProjectCode(): Promise<string> {
-  for (let i = 0; i < 20; i++) {
-    const code = `PRJ-${String(await nextSequence("projectCode")).padStart(4, "0")}`;
-    if (!(await Project.exists({ code }))) return code;
-  }
-  throw new ApiError(500, "Could not generate a project ID");
 }
 
 /**
@@ -142,24 +137,8 @@ async function resolveManager(user: CurrentUser, requested: string | null | unde
   return mgr._id;
 }
 
-/** Keeps exactly one active MANAGER membership in sync with Project.manager. */
-async function syncManagerMembership(projectId: Types.ObjectId, managerId: Types.ObjectId, actorId: string) {
-  await ProjectMember.updateMany(
-    { project: projectId, projectRole: "MANAGER", user: { $ne: managerId }, isActive: true },
-    { $set: { isActive: false, leftAt: new Date() } }
-  );
-  const mgr = await User.findById(managerId).select("department").lean();
-  await ProjectMember.updateOne(
-    { project: projectId, user: managerId },
-    {
-      $set: { projectRole: "MANAGER", isActive: true, leftAt: null, department: mgr?.department ?? null },
-      $setOnInsert: { joinedAt: new Date(), addedBy: oid(actorId) },
-    },
-    { upsert: true }
-  );
-}
 
-function toProjectDTO(p: any, progress = EMPTY_PROGRESS, memberCount = 0): ProjectDTO {
+function toProjectDTO(p: any, progress = EMPTY_PROGRESS, memberCount = 0, financial = true): ProjectDTO {
   return {
     id: p._id.toString(),
     code: p.code,
@@ -172,7 +151,7 @@ function toProjectDTO(p: any, progress = EMPTY_PROGRESS, memberCount = 0): Proje
     departments: (p.departments ?? []).map(toDepartmentRef).filter(Boolean),
     startDate: iso(p.startDate),
     endDate: iso(p.endDate),
-    budget: p.budget ?? null,
+    budget: financial ? p.budget ?? null : null,
     approvalMode: (p.approvalMode ?? "DEPARTMENT") as ApprovalMode,
     isArchived: !!p.isArchived,
     memberCount,
@@ -245,7 +224,7 @@ export async function listProjects(
   const ids = rows.map((r) => r._id);
   const [progress, counts] = await Promise.all([progressFor(ids), memberCounts(ids)]);
   return paginate(
-    rows.map((p) => toProjectDTO(p, progress.get(p._id.toString()), counts.get(p._id.toString()))),
+    rows.map((p) => toProjectDTO(p, progress.get(p._id.toString()), counts.get(p._id.toString()), !p.clientRef || ["SUPER_ADMIN", "SALES_EXECUTIVE", "PROJECT_MANAGER"].includes(user.role))),
     total,
     query.page,
     query.pageSize
@@ -302,6 +281,7 @@ export async function getProject(user: CurrentUser, id: string): Promise<Project
     listAttachments(user, "Project", project._id, canManageProject(ctx, project._id)),
   ]);
 
+  const view = await loadHandoverView(user, project);
   const openMap = new Map(openByOwner.filter((r) => r._id).map((r) => [r._id.toString(), r.n]));
   const mcount = new Map(milestoneCounts.map((m) => [m._id.toString(), m]));
   const manage = canManageProject(ctx, project._id);
@@ -312,8 +292,12 @@ export async function getProject(user: CurrentUser, id: string): Promise<Project
       : taskCreationDepartments(ctx, project);
 
   return {
-    ...toProjectDTO(p, progress.get(id), members.filter((m) => m.isActive).length),
+    ...toProjectDTO(p, progress.get(id), members.filter((m) => m.isActive).length, !p?.clientRef || ["SUPER_ADMIN", "SALES_EXECUTIVE", "PROJECT_MANAGER"].includes(user.role)),
     notes: p?.notes ?? "",
+    currency: (p as any)?.currency ?? "INR",
+    clientRef: view.clientRef,
+    handover: view.handover,
+    services: view.services,
     members: members.filter((m) => m.isActive).map((m) => toMemberDTO(m, openMap)),
     formerMembers: members.filter((m) => !m.isActive).map((m) => toMemberDTO(m, openMap)),
     milestones: milestones.map(
@@ -424,6 +408,9 @@ async function notifyDepartmentHeads(project: { _id: any; name: string; code: st
 }
 
 export async function createProject(user: CurrentUser, input: CreateInput): Promise<ProjectDTO> {
+  if (["DRAFT", "HANDOVER_PENDING", "PM_ACCEPTED", "PM_REJECTED"].includes(input.status)) {
+    throw unprocessable("Use the client handover workflow to create a project in this status", { status: "Set only by the handover workflow" });
+  }
   if (!hasPermission(user.role, "project:manage")) throw forbidden();
   const managerId = await resolveManager(user, input.manager);
   const members = input.members.filter((m) => m.user !== managerId.toString());
@@ -496,6 +483,18 @@ export async function updateProject(user: CurrentUser, id: string, input: Update
   const { project } = await loadManagedProject(user, id);
   const update: Record<string, unknown> = {};
 
+  // Ownership and the handover statuses belong to the handover workflow, never to a plain edit.
+  if (input.status !== undefined) {
+    const blocked = statusEditError(project.status as ProjectStatus, input.status);
+    if (blocked) throw unprocessable(blocked, { status: blocked });
+    if (input.status === "ACTIVE" && project.status !== "ACTIVE" && !(input.departments?.length ?? project.departments.length)) {
+      throw unprocessable("Assign at least one department before activating the project", { status: "Assign a department first" });
+    }
+  }
+  if (!project.manager && input.manager) {
+    throw unprocessable("The manager is set when the nominated Project Manager accepts the handover", { manager: "Not allowed before the handover is accepted" });
+  }
+
   for (const f of ["name", "client", "description", "notes", "priority", "status", "budget", "approvalMode"] as const) {
     if (input[f] !== undefined && input[f] !== (project as any)[f]) update[f] = input[f];
   }
@@ -503,7 +502,7 @@ export async function updateProject(user: CurrentUser, id: string, input: Update
   if (input.endDate !== undefined) update.endDate = toEndOfDay(input.endDate);
 
   // Manager changes: Super Admin only.
-  if (input.manager !== undefined && input.manager && input.manager !== project.manager.toString()) {
+  if (input.manager !== undefined && input.manager && input.manager !== project.manager?.toString()) {
     if (user.role !== "SUPER_ADMIN") throw forbidden("Only a Super Admin can change the project manager");
     update.manager = await resolveManager(user, input.manager);
   }
@@ -561,7 +560,7 @@ export async function updateProject(user: CurrentUser, id: string, input: Update
     summary: `Updated ${project.name}: ${Object.keys(changes).join(", ")}`,
     changes,
   });
-  await notifyDepartmentHeads(project, addedDepts, user.id, [project.manager.toString()]);
+  await notifyDepartmentHeads(project, addedDepts, user.id, [project.manager?.toString() ?? ""]);
   if (update.manager) {
     await notify({
       recipients: [update.manager as Types.ObjectId],
@@ -600,6 +599,7 @@ export async function updateProjectMembers(
 ): Promise<{ added: number; removed: number; updated: number; openTasksOfRemoved: number }> {
   const { project } = await loadManagedProject(user, id);
   const projectDepts = project.departments.map((d) => d.toString());
+  if (!project.manager) throw unprocessable("Team allocation opens once a Project Manager has accepted the handover");
   const managerId = project.manager.toString();
 
   if (input.add.some((m) => m.user === managerId) || input.remove.includes(managerId)) {

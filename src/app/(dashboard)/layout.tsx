@@ -15,6 +15,7 @@ export default async function DashboardLayout({ children }: LayoutProps<"/">) {
         role: user.role,
         roleName: user.roleName,
         departmentId: user.departmentId,
+        permissions: user.permissions,
       }}
     >
       {children}
